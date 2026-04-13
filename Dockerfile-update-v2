@@ -1,0 +1,3 @@
+FROM localhost/batchcorrector:latest
+RUN R -e "BiocManager::install('impute', update = FALSE)"
+RUN R -e "install.packages('openxlsx', repos='https://cloud.r-project.org')"

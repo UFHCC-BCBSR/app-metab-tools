@@ -1,0 +1,2 @@
+FROM localhost/batchcorrector:latest
+RUN R -e "BiocManager::install('impute', update = FALSE)"
