@@ -69,7 +69,7 @@ normalize_matrix <- function(count_matrix, row_norm = "SumNorm",
 # UI
 # ===========================
 ui <- dashboardPage(
-  dashboardHeader(title = "Batch Corrector"),
+  dashboardHeader(title = "Metabo Tools"),
   dashboardSidebar(
     sidebarMenu(
       menuItem("Upload Data", tabName = "upload", icon = icon("upload")),
@@ -100,7 +100,7 @@ ui <- dashboardPage(
                 )
               ),
               fluidRow(
-                box(title = "Upload Count Data", status = "primary", solidHeader = TRUE, width = 6,
+                box(title = "Upload Data", status = "primary", solidHeader = TRUE, width = 6,
                     fileInput("count_file", "Choose Count Data File (.csv or .xlsx)",
                               accept = c(".csv", ".xlsx")),
                     conditionalPanel(
@@ -779,14 +779,13 @@ server <- function(input, output, session) {
     has_bio_var <- pca_result$has_bio_var
     
     # Distinct color palettes for each plot
-    batch_colors <- c("#e41a1c", "#377eb8", "#4daf4a", "#984ea3", 
-                      "#ff7f00", "#a65628", "#f781bf", "#999999")
+    batch_colors <- colorRampPalette(RColorBrewer::brewer.pal(8, "Set1"))(length(unique(pca_df$batch)))
     bio_colors <- c("#66c2a5", "#fc8d62", "#8da0cb", "#e78ac3",
                     "#a6d854", "#ffd92f", "#e5c494", "#b3b3b3")
     
     p_batch <- plot_ly(pca_df, x = ~PC1, y = ~PC2, 
                        color = ~batch,
-                       colors = batch_colors[1:length(unique(pca_df$batch))],
+                       colors = batch_colors,
                        text = ~sample_name, 
                        hovertemplate = "%{text}<extra></extra>",
                        type = "scatter", mode = "markers",
