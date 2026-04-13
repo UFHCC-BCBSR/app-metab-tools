@@ -210,9 +210,15 @@ generate_readme <- function(params) {
 # ===========================
 embed_plotly <- function(fig) {
   if (is.null(fig)) return("")
-  tmp <- tempfile(fileext = ".html")
-  htmlwidgets::saveWidget(fig, tmp, selfcontained = TRUE)
-  paste(readLines(tmp), collapse = "\n")
+  div_id <- paste0("plotly_", paste(sample(letters, 10, replace = TRUE), collapse = ""))
+  fig_json <- plotly::plotly_json(fig, jsonedit = FALSE)
+  paste0(
+    '<div id="', div_id, '" style="width:100%;height:400px;"></div>',
+    '<script>',
+    'Plotly.newPlot("', div_id, '",',
+    fig_json,
+    ');</script>'
+  )
 }
 
 generate_html_report <- function(params, pca_before_result, pca_after_result, output_path) {
@@ -288,18 +294,42 @@ generate_html_report <- function(params, pca_before_result, pca_after_result, ou
                        "MedianNorm" = "median normalization",
                        "None" = "no sample normalization")
 
+sva_version <- as.character(packageVersion("sva"))
+impute_version <- as.character(packageVersion("impute"))
+
+scaling_sentence <- switch(params$scale_norm,
+  "ParetoNorm" = "Data were subsequently Pareto scaled (mean-centered and divided by the square root of the standard deviation of each feature). ",
+  "AutoNorm"   = "Data were subsequently auto scaled (mean-centered and divided by the standard deviation of each feature). ",
+  "None"       = ""
+)
+
 methods_paragraph <- paste0(
   "Metabolomics data processing was performed using Metabo Tools, a web application developed by the ",
-  "University of Florida Southeast Center for Integrated Metabolomics (SECIM; <a href='https://secim.ufl.edu/'>https://secim.ufl.edu/</a>). ",
-  "Raw peak intensity data from ", params$n_samples, " samples and ", params$n_original, " features was imported. ",
-  if (params$do_missing_filter) paste0("Features with greater than 50% missing or zero values were removed, retaining ", params$n_after_missing, " features. ") else "",
-  if (params$do_imputation) paste0("Remaining missing and zero values (n = ", params$n_imputed, ") were imputed using k-nearest neighbours (KNN, k = 10). ") else "",
-  if (params$do_iqr_filter) paste0("Low-variance features were removed by filtering the bottom ", params$iqr_threshold, "% by interquartile range, retaining ", params$n_after_iqr, " features. ") else "",
+  "University of Florida Southeast Center for Integrated Metabolomics (SECIM; ",
+  "<a href='https://secim.ufl.edu/'>https://secim.ufl.edu/</a>). ",
+  "All analyses were conducted in R using the sva package (v", sva_version, "; Johnson et al., 2007) ",
+  "for batch correction and the impute package (v", impute_version, ") for missing value imputation. ",
+  "Raw peak intensity data from ", params$n_samples, " samples and ", params$n_original, " features were imported. ",
+  if (params$do_missing_filter) paste0(
+    "Features with greater than 50% missing or zero values were removed, retaining ",
+    params$n_after_missing, " features. ") else "",
+  if (params$do_imputation) paste0(
+    "Remaining missing and zero values (n = ", params$n_imputed, ") were imputed using ",
+    "k-nearest neighbours (KNN, k = 10) as implemented in the Bioconductor impute package. ") else "",
+  if (params$do_iqr_filter) paste0(
+    "Low-variance features were removed by filtering the bottom ", params$iqr_threshold,
+    "% by interquartile range, retaining ", params$n_after_iqr, " features. ") else "",
   "Samples were normalized by ", norm_label, " followed by log2 transformation. ",
-  "Batch effects were removed using ComBat",
-  if (params$bio_var != "None") paste0(" with biological group (", params$bio_var, ") preserved in the model. ") else ". ",
-  "Data was subsequently ", scale_label, " applied. ",
-  "The final processed matrix contained ", params$n_final, " features across ", params$n_samples, " samples."
+  "Batch effects were removed using the ComBat empirical Bayes method",
+  if (params$bio_var != "None") paste0(
+    " with biological group (", params$bio_var, ") included as a covariate to preserve ",
+    "biological variation during correction (Johnson et al., 2007). ") else " (Johnson et al., 2007). ",
+  scaling_sentence,
+  "The final processed matrix contained ", params$n_final, " features across ", params$n_samples, " samples.",
+  "<br><br>",
+  "<strong>Reference:</strong> Johnson WE, Li C, Rabinovic A. ",
+  "Adjusting batch effects in microarray expression data using empirical Bayes methods. ",
+  "<em>Biostatistics</em>. 2007;8(1):118-127. doi:10.1093/biostatistics/kxj037"
 )
 
   html_content <- paste0('
