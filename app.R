@@ -810,9 +810,15 @@ server <- function(input, output, session) {
         sample_data_matched <- sample_processed[sample_processed$sample_name %in% sample_mapping, ]
         sample_order <- match(sample_mapping, sample_data_matched$sample_name)
         sample_data_matched <- sample_data_matched[sample_order, ]
+        full_sample_data <- values$sample_data[
+          values$sample_data[[input$sample_name_col]] %in% sample_mapping, ]
+        full_sample_data <- full_sample_data[
+          match(sample_mapping, full_sample_data[[input$sample_name_col]]), ]
+
         values$matched_data <- list(
           count_matrix = count_matrix,
           sample_data = sample_data_matched,
+          full_sample_data = full_sample_data,
           matched_samples = matched_samples,
           unmatched_samples = unmatched_samples,
           has_bio_var = has_bio_var
@@ -944,6 +950,7 @@ server <- function(input, output, session) {
 
   observeEvent(input$run_combat, {
     req(values$normalized_data, values$matched_data, input$scale_norm)
+    shinyjs::disable("run_combat")
     showModal(modalDialog("Running ComBat batch correction...", footer = NULL))
     tryCatch({
       mat_norm <- values$normalized_data
@@ -974,12 +981,14 @@ server <- function(input, output, session) {
       values$pca_after <- perform_pca(mat_corrected_scaled, sample_data, has_bio_var)
 
       removeModal()
+      shinyjs::enable("run_combat")
       showNotification("Batch correction and scaling complete!", type = "message")
     }, error = function(e) {
       removeModal()
+      shinyjs::enable("run_combat")
       showNotification(paste("Error in batch correction:", e$message), type = "error")
     })
-  })
+  }, ignoreInit = TRUE)
 
   output$pca_before <- renderPlotly({
     req(values$pca_before)
@@ -1109,7 +1118,7 @@ server <- function(input, output, session) {
       writeData(wb, "data_normalized", mat_to_df(values$normalized_data))
       writeData(wb, "data_normalized_scaled", mat_to_df(values$normalized_scaled_data))
       writeData(wb, "data_batch_corrected_scaled", mat_to_df(values$batch_corrected_scaled_data))
-      writeData(wb, "metadata", values$matched_data$sample_data)
+      writeData(wb, "metadata", values$matched_data$full_sample_data)
 
       # Style README
       headerStyle <- createStyle(textDecoration = "bold", fgFill = "#2980b9",
