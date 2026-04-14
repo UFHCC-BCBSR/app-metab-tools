@@ -61,7 +61,7 @@ scale_matrix <- function(mat, method) {
   mat
 }
 
-perform_pca <- function(count_matrix, sample_data, has_bio_var = TRUE) {
+perform_pca <- function(count_matrix, sample_data, has_bio_var = TRUE, bio_var_name = "Biological Variable") {
   plot_matrix <- log2(abs(count_matrix) + 1)
   plot_matrix <- plot_matrix[apply(plot_matrix, 1, function(x) all(is.finite(x))), ]
   if (nrow(plot_matrix) > 1000) {
@@ -86,53 +86,59 @@ perform_pca <- function(count_matrix, sample_data, has_bio_var = TRUE) {
     pca_df$biological_var <- as.factor(rep("No biological variable", nrow(pca_df)))
   }
   variance_explained <- summary(pca_result)$importance[2, 1:2] * 100
-  list(pca_df = pca_df, variance_explained = variance_explained, has_bio_var = has_bio_var)
+  list(pca_df = pca_df, variance_explained = variance_explained, has_bio_var = has_bio_var, bio_var_name = bio_var_name)
 }
 
 create_pca_plots <- function(pca_result, title) {
   req(pca_result)
-  pca_df <- pca_result$pca_df
-  var_exp <- pca_result$variance_explained
+  pca_df      <- pca_result$pca_df
+  var_exp     <- pca_result$variance_explained
   has_bio_var <- pca_result$has_bio_var
+  bio_var_name <- if (!is.null(pca_result$bio_var_name)) pca_result$bio_var_name else "Biological Variable"
+  
   batch_colors <- colorRampPalette(RColorBrewer::brewer.pal(8, "Set1"))(length(unique(pca_df$batch)))
-  bio_colors <- c("#66c2a5", "#fc8d62", "#8da0cb", "#e78ac3",
-                  "#a6d854", "#ffd92f", "#e5c494", "#b3b3b3")
+  bio_colors   <- c("#66c2a5", "#fc8d62", "#8da0cb", "#e78ac3",
+                    "#a6d854", "#ffd92f", "#e5c494", "#b3b3b3")
+  
+  # Each level gets its own legendgroup so the two plots never share legend entries
+  n_bio   <- length(unique(pca_df$biological_var))
+  n_batch <- length(unique(pca_df$batch))
+  
   p_batch <- plot_ly(pca_df, x = ~PC1, y = ~PC2,
                      color = ~batch,
                      colors = batch_colors,
                      text = ~sample_name,
                      hovertemplate = "%{text}<extra></extra>",
                      type = "scatter", mode = "markers",
+                     legendgrouptitle = list(text = "<b>Batch</b>"),
                      legendgroup = "batch",
                      showlegend = TRUE) %>%
     layout(
-      title = "Colored by Batch",
       xaxis = list(title = paste0("PC1 (", round(var_exp[1], 1), "%)")),
-      yaxis = list(title = paste0("PC2 (", round(var_exp[2], 1), "%)")),
-      legend = list(title = list(text = "<b>Batch</b>"))
-    )
+      yaxis = list(title = paste0("PC2 (", round(var_exp[2], 1), ")%")))
+  
   if (has_bio_var && !all(pca_df$biological_var == "No biological variable")) {
     p_bio <- plot_ly(pca_df, x = ~PC1, y = ~PC2,
                      color = ~biological_var,
-                     colors = bio_colors[1:length(unique(pca_df$biological_var))],
+                     colors = bio_colors[1:n_bio],
                      text = ~sample_name,
                      hovertemplate = "%{text}<extra></extra>",
                      type = "scatter", mode = "markers",
+                     legendgrouptitle = list(text = paste0("<b>", bio_var_name, "</b>")),
                      legendgroup = "bio",
                      showlegend = TRUE) %>%
       layout(
-        title = "Colored by Biological Variable",
         xaxis = list(title = paste0("PC1 (", round(var_exp[1], 1), "%)")),
-        yaxis = list(title = paste0("PC2 (", round(var_exp[2], 1), "%)")),
-        legend = list(title = list(text = "<b>Biological Variable</b>"))
-      )
+        yaxis = list(title = paste0("PC2 (", round(var_exp[2], 1), "%)")))
+    
     subplot(p_bio, p_batch, nrows = 1, margin = 0.08,
             shareX = FALSE, shareY = FALSE,
             titleX = TRUE, titleY = TRUE) %>%
       layout(
         title = list(text = title, x = 0.5),
+        legend = list(tracegroupgap = 40),
         annotations = list(
-          list(x = 0.2, y = 1.05, text = "<b>Biological Variable</b>",
+          list(x = 0.2, y = 1.05, text = paste0("<b>", bio_var_name, "</b>"),
                xref = "paper", yref = "paper", showarrow = FALSE,
                font = list(size = 13)),
           list(x = 0.8, y = 1.05, text = "<b>Batch</b>",
@@ -786,8 +792,8 @@ server <- function(input, output, session) {
 
   observeEvent(input$load_demo, {
     tryCatch({
-      if (file.exists("test-data/counts-data.csv") && file.exists("test-data/sample-data.csv")) {
-        values$count_data <- read.csv("test-data/counts-data.csv", stringsAsFactors = FALSE)
+      if (file.exists("test-data/peak-data.csv") && file.exists("test-data/sample-data.csv")) {
+        values$count_data <- read.csv("test-data/peak-data.csv", stringsAsFactors = FALSE)
         values$sample_data <- read.csv("test-data/sample-data.csv", stringsAsFactors = FALSE)
         updateSelectInput(session, "feature_col", choices = colnames(values$count_data), selected = "gene_id")
         updateSelectInput(session, "drop_cols", choices = colnames(values$count_data),
@@ -999,7 +1005,8 @@ server <- function(input, output, session) {
       values$pca_before <- perform_pca(
         values$normalized_data,
         values$matched_data$sample_data,
-        values$matched_data$has_bio_var
+        values$matched_data$has_bio_var,
+        bio_var_name = if (values$matched_data$has_bio_var) input$bio_col else "Biological Variable"
       )
       values$pca_before_complete <- TRUE
       showNotification("PCA complete!", type = "message")
@@ -1038,7 +1045,12 @@ server <- function(input, output, session) {
       # Update params with scale
       values$processing_params$scale_norm <- input$scale_norm
 
-      values$pca_after <- perform_pca(mat_corrected_scaled, sample_data, has_bio_var)
+      values$pca_after <- perform_pca(
+        mat_corrected_scaled,
+        sample_data,
+        has_bio_var,
+        bio_var_name = if (has_bio_var) isolate(input$bio_col) else "Biological Variable"
+      )
 
       removeModal()
       shinyjs::enable("run_combat")
