@@ -508,11 +508,40 @@ ui <- dashboardPage(
       tabItem(tabName = "upload",
               fluidRow(
                 box(title = "Try the Demo", status = "success", solidHeader = TRUE, width = 12,
-                    p("Want to try the app with example data first?"),
-                    actionButton("load_demo", "Load Test Data",
-                                 class = "btn-success btn-lg",
-                                 icon = icon("play")),
-                    br(), br(),
+                    p("Load one of the example datasets below to explore the app before uploading your own data."),
+                    fluidRow(
+                      column(4,
+                             div(style = "display: flex; align-items: center; gap: 8px;",
+                                 actionButton("load_demo", "Load Simulated Data",
+                                              class = "btn-success btn-lg",
+                                              icon = icon("play")),
+                                 actionButton("info_simulated", icon("info-circle"),
+                                              class = "btn-default btn-sm",
+                                              title = "About this dataset")
+                             )
+                      ),
+                      column(4,
+                             div(style = "display: flex; align-items: center; gap: 8px;",
+                                 actionButton("load_pos", "Load Positive Mode Test Data",
+                                              class = "btn-info btn-lg",
+                                              icon = icon("play")),
+                                 actionButton("info_pos", icon("info-circle"),
+                                              class = "btn-default btn-sm",
+                                              title = "About this dataset")
+                             )
+                      ),
+                      column(4,
+                             div(style = "display: flex; align-items: center; gap: 8px;",
+                                 actionButton("load_neg", "Load Negative Mode Test Data",
+                                              class = "btn-warning btn-lg",
+                                              icon = icon("play")),
+                                 actionButton("info_neg", icon("info-circle"),
+                                              class = "btn-default btn-sm",
+                                              title = "About this dataset")
+                             )
+                      )
+                    ),
+                    br(),
                     div(id = "demo_info", style = "display: none;",
                         div(style = "background-color: #d4edda; padding: 10px; border-radius: 5px; border: 1px solid #c3e6cb;",
                             p(strong("Demo data loaded!"),
@@ -790,29 +819,98 @@ server <- function(input, output, session) {
     values$pca_before_complete <- FALSE
   })
 
-  observeEvent(input$load_demo, {
+  observeEvent(input$info_simulated, {
+    showModal(modalDialog(
+      title = "Simulated Dataset",
+      p("This dataset was generated to demonstrate batch correction. It contains 60 simulated samples across 3 batches with 2 biological groups (Control and Treatment) and 1000 features."),
+      p("Batch effects were spiked in as large additive shifts on the log2 scale to ensure clear separation by batch before correction. A biological effect was spiked into a subset of 300 features with variable effect sizes to simulate a realistic treatment response."),
+      p("This dataset is intended for testing and demonstration only — effect sizes are larger than typically observed in real metabolomics data."),
+      easyClose = TRUE,
+      footer = modalButton("Close")
+    ))
+  })
+  
+  observeEvent(input$info_pos, {
+    showModal(modalDialog(
+      title = "Positive Ionization Mode Test Dataset",
+      p("This is a real untargeted metabolomics peak intensity table acquired in positive ionization mode."),
+      p("The dataset contains samples across two batches and three levels of a biological variable, making it suitable for testing batch correction with a biological covariate."),
+      p("Feature columns contain raw peak intensities. Missing values are present and will be handled during preprocessing."),
+      easyClose = TRUE,
+      footer = modalButton("Close")
+    ))
+  })
+  
+  observeEvent(input$info_neg, {
+    showModal(modalDialog(
+      title = "Negative Ionization Mode Test Dataset",
+      p("This is a real untargeted metabolomics peak intensity table acquired in negative ionization mode."),
+      p("The dataset contains samples across two batches and three levels of a biological variable, making it suitable for testing batch correction with a biological covariate."),
+      p("Feature columns contain raw peak intensities. Missing values are present and will be handled during preprocessing."),
+      easyClose = TRUE,
+      footer = modalButton("Close")
+    ))
+  })
+  
+  load_dataset <- function(feature_file, sample_file, feature_col,
+                           drop_cols = NULL, batch_col, bio_col, sample_name_col) {
     tryCatch({
-      if (file.exists("test-data/peak-data.csv") && file.exists("test-data/sample-data.csv")) {
-        values$count_data <- read.csv("test-data/peak-data.csv", stringsAsFactors = FALSE)
-        values$sample_data <- read.csv("test-data/sample-data.csv", stringsAsFactors = FALSE)
-        updateSelectInput(session, "feature_col", choices = colnames(values$count_data), selected = "gene_id")
-        updateSelectInput(session, "drop_cols", choices = colnames(values$count_data),
-                          selected = c("description", "notes", "quality_flag"))
-        updateSelectInput(session, "batch_col", choices = colnames(values$sample_data), selected = "batch")
-        updateSelectInput(session, "bio_col", choices = colnames(values$sample_data), selected = "biological_var")
-        updateSelectInput(session, "sample_name_col", choices = colnames(values$sample_data), selected = "sample_name")
-        values$matching_previewed <- FALSE
-        values$preprocessing_complete <- FALSE
-        values$pca_before_complete <- FALSE
+      if (file.exists(feature_file) && file.exists(sample_file)) {
+        values$count_data  <- read.csv(feature_file, stringsAsFactors = FALSE)
+        values$sample_data <- read.csv(sample_file,  stringsAsFactors = FALSE)
+        updateSelectInput(session, "feature_col",     choices = colnames(values$count_data),  selected = feature_col)
+        updateSelectInput(session, "drop_cols",       choices = colnames(values$count_data),  selected = drop_cols)
+        updateSelectInput(session, "batch_col",       choices = colnames(values$sample_data), selected = batch_col)
+        updateSelectInput(session, "bio_col",         choices = colnames(values$sample_data), selected = bio_col)
+        updateSelectInput(session, "sample_name_col", choices = colnames(values$sample_data), selected = sample_name_col)
         updateCheckboxInput(session, "has_bio_var", value = TRUE)
+        values$matching_previewed    <- FALSE
+        values$preprocessing_complete <- FALSE
+        values$pca_before_complete   <- FALSE
         shinyjs::show("demo_info")
-        showNotification("Demo data loaded! Go to Preprocess Data tab.", type = "message")
+        showNotification("Data loaded! Go to Preprocess Data tab.", type = "message")
       } else {
         showNotification("Test data files not found.", type = "error")
       }
     }, error = function(e) {
-      showNotification(paste("Error loading demo data:", e$message), type = "error")
+      showNotification(paste("Error loading data:", e$message), type = "error")
     })
+  }
+  
+  observeEvent(input$load_demo, {
+    load_dataset(
+      feature_file    = "test-data/peak-data.csv",
+      sample_file     = "test-data/sample-data.csv",
+      feature_col     = "feature_id",
+      drop_cols       = NULL,
+      batch_col       = "batch",
+      bio_col         = "biological_var",
+      sample_name_col = "sample_name"
+    )
+  })
+  
+  observeEvent(input$load_pos, {
+    load_dataset(
+      feature_file    = "test-data/Meningiomas85-Met-POS-BatchEffect_feature_data.csv",
+      sample_file     = "test-data/Meningiomas85-Met-POS-BatchEffect_sample_data.csv",
+      feature_col     = colnames(read.csv("test-data/Meningiomas85-Met-POS-BatchEffect_feature_data.csv", nrows = 1))[1],
+      drop_cols       = NULL,
+      batch_col       = "Batch",
+      bio_col         = "Group",
+      sample_name_col = "Sample"
+    )
+  })
+  
+  observeEvent(input$load_neg, {
+    load_dataset(
+      feature_file    = "test-data/Meningiomas85-Met-NEG-BatchEffect_feature_data.csv",
+      sample_file     = "test-data/Meningiomas85-Met-NEG-BatchEffect_sample_data.csv",
+      feature_col     = colnames(read.csv("test-data/Meningiomas85-Met-NEG-BatchEffect_feature_data.csv", nrows = 1))[1],
+      drop_cols       = NULL,
+      batch_col       = "Batch",
+      bio_col         = "Group",
+      sample_name_col = "Sample"
+    )
   })
 
   output$count_uploaded <- reactive({ !is.null(values$count_data) })
