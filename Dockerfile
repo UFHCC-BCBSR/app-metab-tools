@@ -24,7 +24,7 @@ RUN install2.r --error \
     BiocManager
 
 # Install Bioconductor packages
-RUN R -e "BiocManager::install('sva')"
+RUN R -e "BiocManager::install(c('sva', 'limma'))"
 
 # Expose the default Shiny port
 EXPOSE 3838
