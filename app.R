@@ -13,8 +13,15 @@ library(openxlsx)
 library(rmarkdown)
 library(ggplot2)
 library(RColorBrewer)
+library(limma)
 
 options(shiny.maxRequestSize = 30*1024^3)
+
+# Modules. Sourced explicitly rather than relying on auto-loading so the load
+# order is visible and the app behaves the same however it is launched.
+source("modules/report_utils.R")
+source("modules/de_analysis.R")
+source("modules/mod_differential.R")
 
 # ===========================
 # Helper Functions
@@ -214,20 +221,10 @@ generate_readme <- function(params) {
 # ===========================
 # Generate HTML Report
 # ===========================
-embed_plotly <- function(fig) {
-  if (is.null(fig)) return("")
-  div_id <- paste0("plotly_", paste(sample(letters, 10, replace = TRUE), collapse = ""))
-  fig_json <- plotly::plotly_json(fig, jsonedit = FALSE)
-  paste0(
-    '<div id="', div_id, '" style="width:100%;height:400px;"></div>',
-    '<script>',
-    'Plotly.newPlot("', div_id, '",',
-    fig_json,
-    ');</script>'
-  )
-}
-
-generate_html_report <- function(params, pca_before_result, pca_after_result, output_path) {
+# embed_plotly() and the HTML helpers live in modules/report_utils.R, shared
+# with the differential analysis report sections.
+generate_html_report <- function(params, pca_before_result, pca_after_result,
+                                 output_path, de_runs = list()) {
 
   pca_before_batch_fig <- NULL
   pca_before_bio_fig <- NULL
@@ -289,6 +286,31 @@ generate_html_report <- function(params, pca_before_result, pca_after_result, ou
                yaxis = list(title = paste0("PC2 (", round(var_exp[2], 1), "%)")))
     }
   }
+
+  # Differential analysis fragments: an extra row per comparison in the file
+  # guide, and one full section per comparison at the end of the report.
+  de_runs <- if (is.null(de_runs)) list() else de_runs
+  de_file_rows <- if (length(de_runs) > 0) {
+    paste0(vapply(seq_along(de_runs), function(i) {
+      run <- de_runs[[i]]
+      paste0(
+        '<tr><td class="filename">', html_escape(de_sheet_name(run, i)),
+        ' <span class="tag tag-secondary">differential analysis</span></td>',
+        '<td>', if (run$mode == "pairwise") "Moderated t-test" else "Moderated F-test",
+        ' results for ', html_escape(run$label), '</td>',
+        '<td>Per-feature statistics with fold changes, p-values and BH-adjusted FDR. ',
+        run$n_sig, ' of ', run$n_features, ' features were significant.</td></tr>')
+    }, character(1)), collapse = "")
+  } else ""
+
+  de_sections <- if (length(de_runs) > 0) {
+    paste0(vapply(seq_along(de_runs), function(i) de_report_section(de_runs[[i]], i),
+                  character(1)), collapse = "")
+  } else ""
+
+  de_meta_line <- if (length(de_runs) > 0) {
+    paste0('<strong>Differential comparisons:</strong> ', length(de_runs), '<br>')
+  } else ""
 
   scale_label <- switch(params$scale_norm,
                         "ParetoNorm" = "Pareto scaling",
@@ -381,7 +403,8 @@ methods_paragraph <- paste0(
   <strong>Features (input):</strong> ', params$n_original, '<br>
   <strong>Features (final):</strong> ', params$n_final, '<br>
   <strong>Batch correction:</strong> ComBat<br>
-  <strong>Scaling:</strong> ', scale_label, '
+  <strong>Scaling:</strong> ', scale_label, '<br>
+  ', de_meta_line, '
 </div>
 
 <h2>Methods Paragraph</h2>
@@ -446,6 +469,7 @@ methods_paragraph <- paste0(
     <td>Sample metadata with batch column</td>
     <td>Use the batch column when building your model design if using data_normalized_scaled. Includes all matched samples and their group assignments.</td>
   </tr>
+  ', de_file_rows, '
 </table>
 
 <div class="warning">
@@ -476,8 +500,13 @@ methods_paragraph <- paste0(
     html_content <- paste0(html_content, '<div>', embed_plotly(pca_after_bio_fig), '</div>')
   }
 
+  html_content <- paste0(html_content, '</div></div>')
+
+  if (nzchar(de_sections)) {
+    html_content <- paste0(html_content, de_sections)
+  }
+
   html_content <- paste0(html_content, '
-</div></div>
 
 </body>
 </html>
@@ -496,6 +525,7 @@ ui <- dashboardPage(
       menuItem("Upload Data", tabName = "upload", icon = icon("upload")),
       menuItem("Preprocess Data", tabName = "configure", icon = icon("cogs")),
       menuItem("Batch Correction & Scaling", tabName = "correction", icon = icon("magic")),
+      menuItem("Differential Analysis", tabName = "differential", icon = icon("flask")),
       menuItem("Download Results", tabName = "download", icon = icon("download")),
       menuItem("About", tabName = "about", icon = icon("info-circle"))
     )
@@ -715,11 +745,16 @@ ui <- dashboardPage(
               )
       ),
 
+      # Differential Analysis tab
+      tabItem(tabName = "differential",
+              differentialUI("de")
+      ),
+
       # About tab
       tabItem(tabName = "about",
               fluidRow(
                 box(title = "About Metabo Tools", status = "primary", solidHeader = TRUE, width = 12,
-                    p(strong("Metabo Tools"), "is a web application for metabolomics data preprocessing and batch correction."),
+                    p(strong("Metabo Tools"), "is a web application for metabolomics data preprocessing, batch correction, and differential analysis."),
                     p(tags$em("This tool is currently under active development and testing. Please use results with appropriate caution and report any issues.")),
                     br(),
                     h4("Source Code"),
@@ -750,7 +785,7 @@ ui <- dashboardPage(
                 box(title = "Download Results", status = "info", solidHeader = TRUE, width = 12,
                     conditionalPanel(
                       condition = "output.correction_complete",
-                      p("Download your complete results package. The Excel file contains all processed data versions and a README sheet. The HTML report contains a methods paragraph, processing log, file guide, and PCA plots for your records."),
+                      p("Download your complete results package. The Excel file contains all processed data versions, a README sheet, and one sheet per differential analysis comparison. The HTML report contains a methods paragraph, processing log, file guide, PCA plots, and a full section for each differential analysis comparison you ran."),
                       br(),
                       downloadButton("download_excel", "Download Excel Data Package",
                                      class = "btn-primary btn-lg"),
@@ -1256,6 +1291,23 @@ server <- function(input, output, session) {
   })
 
   # ===========================
+  # Differential Analysis
+  # ===========================
+  # The module receives the unscaled matrices on purpose: Pareto/auto scaling
+  # is for visualisation, and modelling scaled values would leave fold changes
+  # in scaled units instead of log2 intensity units.
+  de_runs <- differentialServer("de", reactive({
+    if (is.null(values$normalized_data) || is.null(values$matched_data)) return(NULL)
+    list(
+      normalized = values$normalized_data,
+      batch_corrected = values$batch_corrected_data,
+      sample_data = values$matched_data$sample_data,
+      full_sample_data = values$matched_data$full_sample_data,
+      bio_var_name = if (isTRUE(values$matched_data$has_bio_var)) input$bio_col else NULL
+    )
+  }))
+
+  # ===========================
   # Downloads
   # ===========================
   output$download_excel <- downloadHandler(
@@ -1274,6 +1326,8 @@ server <- function(input, output, session) {
 
       params <- values$processing_params
       readme_df <- generate_readme(params)
+      de_readme <- de_readme_rows(de_runs())
+      if (!is.null(de_readme)) readme_df <- rbind(readme_df, de_readme)
 
       mat_to_df <- function(mat) {
         tibble::rownames_to_column(as.data.frame(mat), var = "feature")
@@ -1296,6 +1350,12 @@ server <- function(input, output, session) {
       writeData(wb, "data_normalized_scaled", mat_to_df(values$normalized_scaled_data))
       writeData(wb, "data_batch_corrected_scaled", mat_to_df(values$batch_corrected_scaled_data))
       writeData(wb, "metadata", values$matched_data$full_sample_data)
+
+      # One sheet per saved differential analysis comparison
+      for (sheet in de_excel_sheets(de_runs())) {
+        addWorksheet(wb, sheet$name)
+        writeData(wb, sheet$name, sheet$data)
+      }
 
       # Style README
       headerStyle <- createStyle(textDecoration = "bold", fgFill = "#2980b9",
@@ -1322,7 +1382,8 @@ server <- function(input, output, session) {
         params = values$processing_params,
         pca_before_result = values$pca_before,
         pca_after_result = values$pca_after,
-        output_path = file
+        output_path = file,
+        de_runs = de_runs()
       )
     }
   )
