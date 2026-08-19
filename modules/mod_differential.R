@@ -397,10 +397,8 @@ differentialServer <- function(id, modes) {
           paste0("Colored points clear both the FDR and fold change thresholds. ",
                  "Positive log2 fold changes are higher in ", rv$current$group_a, ".", mode_note))
       } else {
-        paras <- de_significance_help(rv$current)
-        paras[length(paras)] <- paste0(paras[length(paras)], mode_note)
-        div(style = "color: #666; max-width: 900px;",
-            lapply(paras, function(x) p(x)))
+        p(style = "color: #666; max-width: 900px;",
+          paste0(de_significance_help(rv$current), mode_note))
       }
     })
 
@@ -428,9 +426,8 @@ differentialServer <- function(id, modes) {
       ml <- heatmap_mode()
       sel <- de_display_features(rv$current, mode_label = ml)
       multi <- length(rv$current$mode_labels) > 1
-      prefix <- if (multi) paste0("Each mode gets its own heatmap: positive and negative mode were run as ",
-                                 "two separate experiments on different sample injections, so there is no ",
-                                 "single set of samples that both could be drawn against. ") else ""
+      prefix <- if (multi) paste0("Each mode gets its own heatmap because positive and negative mode ",
+                                 "were run as two separate experiments on different sample injections. ") else ""
       if (sel$used_fallback) {
         p(style = "color: #666;",
           paste0(prefix, "No feature cleared the thresholds in this mode, so the strongest features by p-value are shown. Values are per-feature z-scores."))
