@@ -65,7 +65,7 @@ perform_pca <- function(count_matrix, sample_data, has_bio_var = TRUE,
   # otherwise show up in the legend as "trace 0".
   label_blanks <- function(x) {
     x <- as.character(x)
-    ifelse(is.na(x) | !nzchar(trimws(x)), "(unlabelled)", x)
+    ifelse(is.na(x) | !nzchar(trimws(x)), "(unlabeled)", x)
   }
   pca_df <- data.frame(
     PC1 = pca_result$x[, 1],
@@ -240,7 +240,7 @@ match_samples <- function(count_data, sample_data, feature_col, sample_name_col,
 }
 
 # Does this mode have a batch variable with more than one level? Everything
-# downstream — ComBat, the batch covariate option, the PCA colouring — depends
+# downstream — ComBat, the batch covariate option, the PCA coloring — depends
 # on this one question, so it is asked in exactly one place.
 has_usable_batch <- function(matched) {
   if (is.null(matched) || !isTRUE(matched$has_batch)) return(FALSE)
