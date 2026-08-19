@@ -5,13 +5,13 @@
 # differential analysis module. Nothing here touches Shiny reactivity, so every
 # piece can be run and checked from a plain R session.
 #
-# Modelling follows limma: one linear model per feature on log2 intensities,
+# Modeling follows limma: one linear model per feature on log2 intensities,
 # with variance moderated across features by empirical Bayes. Two matrices can
-# be modelled and the two are mutually exclusive, exactly as the processing
+# be modeled and the two are mutually exclusive, exactly as the processing
 # report warns:
 #   "normalized"      log2-normalized data, batch included as a model covariate
 #   "batch_corrected" ComBat-corrected data, no batch term in the design
-# Scaled matrices are never modelled — Pareto/auto scaling would leave the
+# Scaled matrices are never modeled — Pareto/auto scaling would leave the
 # coefficients in scaled units and destroy the fold change interpretation.
 
 DE_MAX_HEATMAP_FEATURES <- 50
@@ -44,10 +44,27 @@ de_group_candidates <- function(sample_df) {
   if (is.null(sample_df) || ncol(sample_df) == 0) return(character(0))
   n <- nrow(sample_df)
   keep <- vapply(sample_df, function(col) {
-    lv <- unique(col[!is.na(col)])
+    lv <- unique(col[!is.na(col) & col != ""])
     length(lv) >= 2 && length(lv) <= max(2, floor(n / 2))
   }, logical(1))
   colnames(sample_df)[keep]
+}
+
+# Grouping columns shared by every mode. Modes are separate acquisitions with
+# their own metadata files, so only columns present in all of them can drive a
+# comparison that spans modes.
+de_shared_group_candidates <- function(modes) {
+  if (length(modes) == 0) return(character(0))
+  cands <- lapply(modes, function(m) de_group_candidates(m$matched_data$full_sample_data))
+  Reduce(intersect, cands)
+}
+
+de_group_levels <- function(modes, group_var) {
+  lv <- unique(unlist(lapply(modes, function(m) {
+    col <- m$matched_data$full_sample_data[[group_var]]
+    unique(col[!is.na(col) & col != ""])
+  })))
+  sort(lv)
 }
 
 # Design matrix with one column per group (no intercept) plus optional batch
@@ -74,24 +91,17 @@ de_level_keys <- function(groups) {
   setNames(make.names(levels(groups), unique = TRUE), levels(groups))
 }
 
-# Fit the model and return a tidy results table. `mode` is "pairwise" for a
-# moderated t-test between two groups, or "global" for a moderated F-test
-# asking whether a feature differs across any of the groups.
-de_run <- function(mat, groups, batch = NULL,
-                   mode = c("pairwise", "global"),
-                   group_a = NULL, group_b = NULL,
-                   matrix_source = "normalized",
-                   use_batch = FALSE,
-                   group_var = "group",
-                   fdr_cutoff = 0.05,
-                   lfc_cutoff = 1) {
-  mode <- match.arg(mode)
+# Fit one mode. Returns raw p-values and effect sizes only — the FDR is applied
+# later across every mode at once, because the multiple testing burden belongs
+# to the experiment, not to one acquisition.
+de_fit_one <- function(mat, groups, batch = NULL, mode = "pairwise",
+                       group_a = NULL, group_b = NULL, use_batch = FALSE,
+                       group_var = "group", mode_label = "") {
   if (is.null(mat) || nrow(mat) == 0) stop("No features available to test.")
   if (ncol(mat) != length(groups)) {
     stop("Sample metadata and data matrix are out of sync — re-run sample matching.")
   }
 
-  # Drop samples with no group (and no batch, when batch is in the model)
   keep <- !is.na(groups) & groups != ""
   if (use_batch && !is.null(batch)) keep <- keep & !is.na(batch)
   mat <- mat[, keep, drop = FALSE]
@@ -99,48 +109,42 @@ de_run <- function(mat, groups, batch = NULL,
   if (!is.null(batch)) batch <- droplevels(as.factor(batch[keep]))
 
   if (nlevels(groups) < 2) {
-    stop("The grouping variable has fewer than two groups among the matched samples.")
+    stop(paste0(mode_label, ": fewer than two groups remain after filtering."))
   }
-
   if (mode == "pairwise") {
-    if (is.null(group_a) || is.null(group_b)) stop("Select two groups to compare.")
-    if (identical(group_a, group_b)) stop("Select two different groups to compare.")
     missing <- setdiff(c(group_a, group_b), levels(groups))
     if (length(missing) > 0) {
-      stop(paste0("Group not found in the matched samples: ", paste(missing, collapse = ", ")))
+      stop(paste0(mode_label, ": group not present — ", paste(missing, collapse = ", ")))
     }
     small <- c(group_a, group_b)[table(groups)[c(group_a, group_b)] < 2]
     if (length(small) > 0) {
-      stop(paste0("Need at least 2 samples per group; too few in: ", paste(small, collapse = ", ")))
+      stop(paste0(mode_label, ": need at least 2 samples per group; too few in ",
+                  paste(small, collapse = ", ")))
     }
   }
 
   design <- de_build_design(groups, if (use_batch) batch else NULL)
   if (qr(design)$rank < ncol(design)) {
-    stop(paste0("The model is not identifiable: '", group_var,
+    stop(paste0(mode_label, ": the model is not identifiable — '", group_var,
                 "' and batch are confounded, so their effects cannot be separated. ",
-                "Use the ComBat-corrected matrix instead, or choose a grouping variable ",
-                "that varies within batches."))
+                "Model the ComBat-corrected matrix, drop the batch covariate, or choose a ",
+                "grouping variable that varies within batches."))
   }
   if (nrow(design) - ncol(design) < 1) {
-    stop("Not enough samples to estimate the model — no residual degrees of freedom remain.")
+    stop(paste0(mode_label, ": not enough samples to estimate the model."))
   }
 
   keys <- de_level_keys(groups)
   contrast_strings <- if (mode == "pairwise") {
-    setNames(paste0(keys[[group_a]], "-", keys[[group_b]]),
-             paste0(group_a, " vs ", group_b))
+    setNames(paste0(keys[[group_a]], "-", keys[[group_b]]), paste0(group_a, " vs ", group_b))
   } else {
     ref <- levels(groups)[1]
     others <- levels(groups)[-1]
-    setNames(paste0(keys[others], "-", keys[[ref]]),
-             paste0(others, " vs ", ref))
+    setNames(paste0(keys[others], "-", keys[[ref]]), paste0(others, " vs ", ref))
   }
 
   fit <- limma::lmFit(mat, design)
   cm <- limma::makeContrasts(contrasts = unname(contrast_strings), levels = design)
-  # topTable() runs its columns through check.names, so the contrast columns are
-  # named with syntactic keys here and the readable labels kept alongside.
   contrast_keys <- make.names(names(contrast_strings), unique = TRUE)
   colnames(cm) <- contrast_keys
   fit2 <- limma::eBayes(limma::contrasts.fit(fit, cm), trend = TRUE)
@@ -154,69 +158,137 @@ de_run <- function(mat, groups, batch = NULL,
       mean_intensity = tt$AveExpr,
       t = tt$t,
       p_value = tt$P.Value,
-      fdr = tt$adj.P.Val,
       stringsAsFactors = FALSE
     )
-    res$significant <- res$fdr <= fdr_cutoff & abs(res$log2FC) >= lfc_cutoff
-    n_up <- sum(res$significant & res$log2FC > 0)
-    n_down <- sum(res$significant & res$log2FC < 0)
   } else {
-    # With exactly two groups the F-test reduces to the t-test on the single
-    # contrast, and limma has no F column to sort on — F is then t squared.
     multi <- ncol(cm) > 1
     tt <- if (multi) {
       limma::topTable(fit2, number = Inf, sort.by = "F")
     } else {
       limma::topTable(fit2, coef = 1, number = Inf, sort.by = "P")
     }
-    lfc_mat <- if (multi) {
-      as.matrix(tt[, contrast_keys, drop = FALSE])
-    } else {
-      as.matrix(tt[, "logFC", drop = FALSE])
-    }
-    colnames(lfc_mat) <- paste0(
-      "log2FC_", gsub("[^A-Za-z0-9]+", "_", names(contrast_strings)))
+    lfc_mat <- if (multi) as.matrix(tt[, contrast_keys, drop = FALSE]) else as.matrix(tt[, "logFC", drop = FALSE])
+    colnames(lfc_mat) <- paste0("log2FC_", gsub("[^A-Za-z0-9]+", "_", names(contrast_strings)))
     res <- data.frame(
       feature = rownames(tt),
       mean_intensity = tt$AveExpr,
       F = if (multi) tt$F else tt$t^2,
       p_value = tt$P.Value,
-      fdr = tt$adj.P.Val,
       stringsAsFactors = FALSE
     )
     res <- cbind(res, as.data.frame(lfc_mat))
     res$max_abs_log2FC <- apply(abs(lfc_mat), 1, max)
-    res$significant <- res$fdr <= fdr_cutoff
+  }
+
+  list(results = res, matrix = mat, groups = groups, batch = batch,
+       sample_names = colnames(mat), contrasts = contrast_strings,
+       n_features = nrow(res), n_samples = ncol(mat))
+}
+
+# Fit every mode and correct once across all of them.
+#
+# `matrix_source` is one of:
+#   "covariate"       log2-normalized data, batch as a model covariate
+#   "none"            log2-normalized data, no batch term at all
+#   "batch_corrected" ComBat-corrected data, no batch term
+de_run <- function(modes, group_var,
+                   comparison = c("pairwise", "global"),
+                   group_a = NULL, group_b = NULL,
+                   groups_included = NULL,
+                   matrix_source = "covariate",
+                   fdr_cutoff = 0.05, lfc_cutoff = 1) {
+  comparison <- match.arg(comparison)
+  if (length(modes) == 0) stop("No processed data available.")
+  if (comparison == "pairwise") {
+    if (is.null(group_a) || is.null(group_b)) stop("Select two groups to compare.")
+    if (identical(group_a, group_b)) stop("Select two different groups to compare.")
+    groups_included <- c(group_a, group_b)
+  }
+  if (is.null(groups_included) || length(groups_included) < 2) {
+    stop("Select at least two groups to compare.")
+  }
+
+  fits <- lapply(modes, function(m) {
+    mat <- switch(matrix_source,
+                  "batch_corrected" = m$batch_corrected,
+                  m$normalized)
+    if (is.null(mat)) {
+      stop(paste0(m$label, ": the selected data matrix is not available. ",
+                  "Run the scaling step with ComBat enabled for this mode, or choose another matrix."))
+    }
+    groups_all <- m$matched_data$full_sample_data[[group_var]]
+    if (is.null(groups_all)) {
+      stop(paste0(m$label, ": grouping variable '", group_var, "' is not in this mode's metadata."))
+    }
+    batch_all <- m$matched_data$sample_data$batch
+    # Restrict to the selected groups before fitting: unselected groups should
+    # not contribute to the variance estimate or the design.
+    keep <- groups_all %in% groups_included
+    if (sum(keep) == 0) {
+      stop(paste0(m$label, ": none of the selected groups are present."))
+    }
+    use_batch <- identical(matrix_source, "covariate") && isTRUE(m$has_batch)
+    fit <- de_fit_one(
+      mat = mat[, keep, drop = FALSE],
+      groups = groups_all[keep],
+      batch = if (isTRUE(m$has_batch)) batch_all[keep] else NULL,
+      mode = comparison, group_a = group_a, group_b = group_b,
+      use_batch = use_batch, group_var = group_var, mode_label = m$label
+    )
+    fit$label <- m$label
+    fit$use_batch <- use_batch
+    fit
+  })
+
+  # One BH correction across every feature tested in the experiment.
+  per_mode <- lapply(seq_along(fits), function(i) {
+    df <- fits[[i]]$results
+    df$mode <- fits[[i]]$label
+    df
+  })
+  common <- Reduce(intersect, lapply(per_mode, colnames))
+  pooled <- do.call(rbind, lapply(per_mode, function(df) df[, common, drop = FALSE]))
+  pooled$fdr <- p.adjust(pooled$p_value, method = "BH")
+
+  if (comparison == "pairwise") {
+    pooled$significant <- pooled$fdr <= fdr_cutoff & abs(pooled$log2FC) >= lfc_cutoff
+    n_up <- sum(pooled$significant & pooled$log2FC > 0)
+    n_down <- sum(pooled$significant & pooled$log2FC < 0)
+  } else {
+    pooled$significant <- pooled$fdr <= fdr_cutoff
     n_up <- NA_integer_
     n_down <- NA_integer_
   }
 
-  label <- if (mode == "pairwise") {
+  ord <- order(pooled$p_value)
+  pooled <- pooled[ord, , drop = FALSE]
+  front <- c("feature", "mode")
+  pooled <- pooled[, c(front, setdiff(colnames(pooled), front)), drop = FALSE]
+  rownames(pooled) <- NULL
+
+  label <- if (comparison == "pairwise") {
     paste0(group_a, " vs ", group_b)
   } else {
-    paste0("Any difference across ", group_var)
+    paste0("Any difference across ", paste(groups_included, collapse = " / "))
   }
 
   list(
     label = label,
-    mode = mode,
+    mode = comparison,
     group_var = group_var,
     group_a = group_a,
     group_b = group_b,
-    group_levels = levels(groups),
-    groups = groups,
-    matrix = mat,
-    sample_names = colnames(mat),
-    batch = batch,
+    groups_included = groups_included,
     matrix_source = matrix_source,
-    use_batch = use_batch,
-    contrasts = contrast_strings,
+    use_batch = identical(matrix_source, "covariate"),
+    mode_fits = fits,
+    mode_labels = vapply(fits, function(f) f$label, character(1)),
     fdr_cutoff = fdr_cutoff,
     lfc_cutoff = lfc_cutoff,
-    results = res,
-    n_features = nrow(res),
-    n_samples = ncol(mat),
-    n_sig = sum(res$significant),
+    results = pooled,
+    n_features = nrow(pooled),
+    n_samples = sum(vapply(fits, function(f) f$n_samples, numeric(1))),
+    n_sig = sum(pooled$significant),
     n_up = n_up,
     n_down = n_down,
     limma_version = as.character(packageVersion("limma")),
@@ -224,21 +296,18 @@ de_run <- function(mat, groups, batch = NULL,
   )
 }
 
-# Identifies the matrix a comparison was fitted on, so saved comparisons can be
-# dropped when — and only when — the data underneath them changes.
+# Identifies the matrices a comparison was fitted on, so saved comparisons can
+# be dropped when — and only when — the data underneath them changes.
 de_mat_fingerprint <- function(m) {
   if (is.null(m)) return(NA_character_)
   paste(nrow(m), ncol(m), format(sum(m, na.rm = TRUE), digits = 15), sep = ":")
 }
 
 de_matrix_label <- function(run) {
-  if (identical(run$matrix_source, "batch_corrected")) {
-    "ComBat batch-corrected data (no batch term in the model)"
-  } else if (isTRUE(run$use_batch)) {
-    "log2-normalized data with batch as a model covariate"
-  } else {
-    "log2-normalized data (no batch adjustment)"
-  }
+  switch(run$matrix_source,
+         "batch_corrected" = "ComBat batch-corrected data (no batch term in the model)",
+         "none" = "log2-normalized data (no batch adjustment)",
+         "log2-normalized data with batch as a model covariate")
 }
 
 de_design_summary <- function(run) {
@@ -246,6 +315,8 @@ de_design_summary <- function(run) {
   paste0(
     "Comparison: ", run$label, "\n",
     "Test: ", test, " (limma, empirical Bayes)\n",
+    "Modes: ", paste(run$mode_labels, collapse = ", "),
+    if (length(run$mode_labels) > 1) " (fitted separately, one FDR correction across both)" else "", "\n",
     "Data: ", de_matrix_label(run), "\n",
     "Samples: ", run$n_samples, " | Features tested: ", run$n_features, "\n",
     "Thresholds: FDR <= ", run$fdr_cutoff,
@@ -263,6 +334,12 @@ de_p_threshold <- function(run) {
   max(passing, na.rm = TRUE)
 }
 
+de_fit_for_mode <- function(run, mode_label) {
+  idx <- which(run$mode_labels == mode_label)
+  if (length(idx) == 0) return(NULL)
+  run$mode_fits[[idx[1]]]
+}
+
 # ---------------------------
 # Plots
 # ---------------------------
@@ -271,17 +348,15 @@ de_volcano_plot <- function(run, title = NULL) {
   if (run$mode != "pairwise") return(NULL)
   res <- run$results
   status <- ifelse(!res$significant, "Not significant",
-                   ifelse(res$log2FC > 0,
-                          paste0("Up in ", run$group_a),
-                          paste0("Up in ", run$group_b)))
+                   ifelse(res$log2FC > 0, paste0("Up in ", run$group_a), paste0("Up in ", run$group_b)))
   status <- factor(status, levels = c(paste0("Up in ", run$group_a),
-                                      paste0("Up in ", run$group_b),
-                                      "Not significant"))
+                                      paste0("Up in ", run$group_b), "Not significant"))
   df <- data.frame(
     log2FC = res$log2FC,
     neg_log10_p = -log10(res$p_value),
     status = status,
     feature = res$feature,
+    mode = res$mode,
     fdr = res$fdr,
     stringsAsFactors = FALSE
   )
@@ -308,24 +383,28 @@ de_volcano_plot <- function(run, title = NULL) {
       font = list(size = 11, color = "#7f8c8d"))
   }
 
-  plot_ly(df, x = ~log2FC, y = ~neg_log10_p,
-          color = ~status,
-          colors = c(DE_COLORS$up, DE_COLORS$down, DE_COLORS$ns),
-          type = "scatter", mode = "markers",
-          marker = list(size = 6, opacity = 0.75),
-          text = ~paste0("<b>", feature, "</b><br>log2FC: ", round(log2FC, 3),
-                         "<br>p: ", signif(10^(-neg_log10_p), 3),
-                         "<br>FDR: ", signif(fdr, 3)),
-          hovertemplate = "%{text}<extra></extra>") %>%
-    layout(
-      title = list(text = if (is.null(title)) run$label else title, x = 0.5),
-      xaxis = list(title = "log2 fold change", zeroline = FALSE),
-      yaxis = list(title = "-log10(p-value)"),
-      shapes = shapes,
-      annotations = annotations,
-      legend = list(orientation = "h", y = -0.18, x = 0.5, xanchor = "center"),
-      margin = list(b = 90)
-    )
+  multi_mode <- length(run$mode_labels) > 1
+  p <- plot_ly(df, x = ~log2FC, y = ~neg_log10_p,
+               color = ~status,
+               colors = c(DE_COLORS$up, DE_COLORS$down, DE_COLORS$ns),
+               symbol = if (multi_mode) ~mode else NULL,
+               symbols = if (multi_mode) c("circle", "triangle-up") else NULL,
+               type = "scatter", mode = "markers",
+               marker = list(size = 6, opacity = 0.75),
+               text = ~paste0("<b>", feature, "</b><br>mode: ", mode,
+                              "<br>log2FC: ", round(log2FC, 3),
+                              "<br>p: ", signif(10^(-neg_log10_p), 3),
+                              "<br>FDR: ", signif(fdr, 3)),
+               hovertemplate = "%{text}<extra></extra>")
+  p %>% layout(
+    title = list(text = if (is.null(title)) run$label else title, x = 0.5),
+    xaxis = list(title = "log2 fold change", zeroline = FALSE),
+    yaxis = list(title = "-log10(p-value)"),
+    shapes = shapes,
+    annotations = annotations,
+    legend = list(orientation = "h", y = -0.18, x = 0.5, xanchor = "center"),
+    margin = list(b = 90)
+  )
 }
 
 # The F-test has no single fold change to put on an x-axis, so significance is
@@ -335,50 +414,74 @@ de_significance_plot <- function(run, title = NULL) {
   df <- data.frame(
     mean_intensity = res$mean_intensity,
     neg_log10_p = -log10(res$p_value),
-    status = ifelse(res$significant, "Significant", "Not significant"),
+    status = factor(ifelse(res$significant, "Significant", "Not significant"),
+                    levels = c("Significant", "Not significant")),
     feature = res$feature,
+    mode = res$mode,
     fdr = res$fdr,
     stringsAsFactors = FALSE
   )
-  df$status <- factor(df$status, levels = c("Significant", "Not significant"))
   p_thresh <- de_p_threshold(run)
-  shapes <- list()
-  annotations <- list()
+  shapes <- list(); annotations <- list()
   if (!is.na(p_thresh)) {
     rng <- range(df$mean_intensity, na.rm = TRUE)
     shapes[[1]] <- list(type = "line", x0 = rng[1], x1 = rng[2],
                         y0 = -log10(p_thresh), y1 = -log10(p_thresh),
                         line = list(dash = "dot", color = "#95a5a6", width = 1))
-    annotations[[1]] <- list(
-      x = rng[2], y = -log10(p_thresh), xanchor = "right", yanchor = "bottom",
-      text = paste0("FDR = ", run$fdr_cutoff), showarrow = FALSE,
-      font = list(size = 11, color = "#7f8c8d"))
+    annotations[[1]] <- list(x = rng[2], y = -log10(p_thresh), xanchor = "right",
+                             yanchor = "bottom", text = paste0("FDR = ", run$fdr_cutoff),
+                             showarrow = FALSE, font = list(size = 11, color = "#7f8c8d"))
   }
 
+  multi_mode <- length(run$mode_labels) > 1
   plot_ly(df, x = ~mean_intensity, y = ~neg_log10_p,
-          color = ~status,
-          colors = c(DE_COLORS$up, DE_COLORS$ns),
+          color = ~status, colors = c(DE_COLORS$up, DE_COLORS$ns),
+          symbol = if (multi_mode) ~mode else NULL,
+          symbols = if (multi_mode) c("circle", "triangle-up") else NULL,
           type = "scatter", mode = "markers",
           marker = list(size = 6, opacity = 0.75),
-          text = ~paste0("<b>", feature, "</b><br>mean log2 intensity: ",
-                         round(mean_intensity, 3),
+          text = ~paste0("<b>", feature, "</b><br>mode: ", mode,
+                         "<br>mean log2 intensity: ", round(mean_intensity, 3),
                          "<br>FDR: ", signif(fdr, 3)),
           hovertemplate = "%{text}<extra></extra>") %>%
     layout(
       title = list(text = if (is.null(title)) run$label else title, x = 0.5),
       xaxis = list(title = "Mean log2 intensity"),
       yaxis = list(title = "-log10(p-value)"),
-      shapes = shapes,
-      annotations = annotations,
+      shapes = shapes, annotations = annotations,
       legend = list(orientation = "h", y = -0.18, x = 0.5, xanchor = "center"),
       margin = list(b = 90)
     )
 }
 
-# Features worth showing: significant ones, or the top of the table when
-# nothing clears the threshold (with the caller told which it got).
-de_display_features <- function(run, top_n = DE_MAX_HEATMAP_FEATURES) {
+# Features worth showing, optionally restricted to one mode: significant ones,
+# or the top of the table when nothing clears the threshold.
+# The significance plot is unfamiliar, so it gets a real explanation rather than
+# a caption. Written once and used by both the app and the report.
+de_significance_help <- function(run) {
+  n_groups <- length(run$groups_included)
+  c(
+    paste0("This is not a volcano plot, and it cannot be. A volcano plot puts log2 fold change on the x-axis, ",
+           "which needs one number per feature saying how much it changed and in which direction. ",
+           "That number only exists when you compare two groups. Here ", n_groups,
+           " groups are compared at once, so a feature can be high in one group, low in another and ",
+           "middling in a third — there is no single fold change to plot."),
+    paste0("Instead each point is a feature, positioned by its average abundance across all samples ",
+           "(left to right) and by the strength of the evidence that it differs somewhere among the ",
+           "groups (bottom to top, as -log10 of the p-value). Higher means stronger evidence. ",
+           "Points above the dashed line pass the FDR cutoff of ", run$fdr_cutoff, "."),
+    paste0("Reading left to right is a sanity check: if the significant features sat only at the ",
+           "low-abundance end, the result would more likely be noise than biology. Spread across the ",
+           "abundance range is what you want to see."),
+    paste0("What this plot cannot tell you is which groups differ, or in which direction. ",
+           "For that, use the heatmap and the per-feature abundance plots below, or run a two-group ",
+           "comparison, which does give you a volcano plot.")
+  )
+}
+
+de_display_features <- function(run, top_n = DE_MAX_HEATMAP_FEATURES, mode_label = NULL) {
   res <- run$results
+  if (!is.null(mode_label)) res <- res[res$mode == mode_label, , drop = FALSE]
   sig <- res$feature[res$significant]
   used_fallback <- length(sig) == 0
   feats <- if (used_fallback) head(res$feature, top_n) else head(sig, top_n)
@@ -386,21 +489,26 @@ de_display_features <- function(run, top_n = DE_MAX_HEATMAP_FEATURES) {
        n_available = if (used_fallback) nrow(res) else length(sig))
 }
 
-de_heatmap_plot <- function(run, top_n = DE_MAX_HEATMAP_FEATURES) {
-  sel <- de_display_features(run, top_n)
-  feats <- sel$features
+# One heatmap per mode: the modes have different samples, so there is no single
+# column axis that could hold both.
+de_heatmap_plot <- function(run, mode_label = NULL, top_n = DE_MAX_HEATMAP_FEATURES) {
+  if (is.null(mode_label)) mode_label <- run$mode_labels[1]
+  fit <- de_fit_for_mode(run, mode_label)
+  if (is.null(fit)) return(NULL)
+  sel <- de_display_features(run, top_n, mode_label = mode_label)
+  feats <- intersect(sel$features, rownames(fit$matrix))
   if (length(feats) < 2) return(NULL)
 
-  mat <- run$matrix[feats, , drop = FALSE]
+  mat <- fit$matrix[feats, , drop = FALSE]
   # Row z-scores: the heatmap shows each feature's pattern across samples, not
   # absolute intensity, which is what makes features comparable in one panel.
   row_sd <- apply(mat, 1, sd, na.rm = TRUE)
   mat <- sweep(mat, 1, rowMeans(mat, na.rm = TRUE), "-")
   mat <- sweep(mat, 1, ifelse(row_sd > 0, row_sd, 1), "/")
 
-  ord <- order(run$groups, run$sample_names)
+  ord <- order(fit$groups, fit$sample_names)
   mat <- mat[, ord, drop = FALSE]
-  groups_ord <- run$groups[ord]
+  groups_ord <- droplevels(fit$groups[ord])
 
   if (nrow(mat) > 2) {
     hc <- hclust(dist(mat))
@@ -408,14 +516,11 @@ de_heatmap_plot <- function(run, top_n = DE_MAX_HEATMAP_FEATURES) {
   }
 
   limit <- max(abs(mat), na.rm = TRUE)
-  # Group block boundaries and label positions. Names are stripped because a
-  # named length-1 numeric serialises to a JSON object, which plotly ignores.
   sizes <- as.numeric(table(groups_ord))
   group_names <- names(table(groups_ord))
   ends <- cumsum(sizes)
   shapes <- lapply(head(ends, -1), function(b) {
-    list(type = "line", x0 = b - 0.5, x1 = b - 0.5,
-         y0 = -0.5, y1 = nrow(mat) - 0.5,
+    list(type = "line", x0 = b - 0.5, x1 = b - 0.5, y0 = -0.5, y1 = nrow(mat) - 0.5,
          line = list(color = "#2c3e50", width = 1.5))
   })
   centers <- ends - sizes / 2
@@ -426,8 +531,7 @@ de_heatmap_plot <- function(run, top_n = DE_MAX_HEATMAP_FEATURES) {
   })
 
   plot_ly(
-    x = colnames(mat), y = rownames(mat), z = mat,
-    type = "heatmap",
+    x = colnames(mat), y = rownames(mat), z = mat, type = "heatmap",
     colors = colorRamp(c(DE_COLORS$down, "#ffffff", DE_COLORS$up)),
     zmin = -limit, zmax = limit,
     colorbar = list(title = "z-score", len = 0.6),
@@ -436,25 +540,31 @@ de_heatmap_plot <- function(run, top_n = DE_MAX_HEATMAP_FEATURES) {
     layout(
       title = list(text = paste0(
         if (sel$used_fallback) "Top features by p-value — " else "Significant features — ",
-        run$label), x = 0.5),
+        mode_label, " mode"), x = 0.5),
       xaxis = list(title = "", tickangle = -45, showticklabels = ncol(mat) <= 40),
       yaxis = list(title = "", showticklabels = nrow(mat) <= 60),
-      shapes = shapes,
-      annotations = annotations,
+      shapes = shapes, annotations = annotations,
       margin = list(t = 60)
     )
 }
 
+# A feature belongs to exactly one mode, so its boxplot comes from that mode's
+# matrix and samples.
 de_feature_boxplot <- function(run, feature, showlegend = TRUE,
                                title = feature, show_y_title = TRUE) {
-  if (is.null(feature) || !feature %in% rownames(run$matrix)) return(NULL)
+  if (is.null(feature)) return(NULL)
+  row <- run$results[run$results$feature == feature, , drop = FALSE]
+  if (nrow(row) == 0) return(NULL)
+  fit <- de_fit_for_mode(run, row$mode[1])
+  if (is.null(fit) || !feature %in% rownames(fit$matrix)) return(NULL)
+
   df <- data.frame(
-    value = as.numeric(run$matrix[feature, ]),
-    group = run$groups,
-    sample = run$sample_names,
+    value = as.numeric(fit$matrix[feature, ]),
+    group = fit$groups,
+    sample = fit$sample_names,
     stringsAsFactors = FALSE
   )
-  colors <- de_group_colors(levels(run$groups))
+  colors <- de_group_colors(levels(droplevels(fit$groups)))
   y_title <- if (identical(run$matrix_source, "batch_corrected")) {
     "log2 intensity (batch-corrected)"
   } else {
@@ -475,7 +585,7 @@ de_feature_boxplot <- function(run, feature, showlegend = TRUE,
 
 # Long feature names blow out a small panel title.
 de_trunc <- function(x, n = 28) {
-  ifelse(nchar(x) > n, paste0(substr(x, 1, n - 1), "\u2026"), x)
+  ifelse(nchar(x) > n, paste0(substr(x, 1, n - 1), "…"), x)
 }
 
 # A grid of the top features, used in the report so a reader sees the effects
@@ -484,19 +594,20 @@ de_top_boxplots <- function(run, n = DE_REPORT_BOXPLOT_FEATURES) {
   sel <- de_display_features(run, n)
   feats <- head(sel$features, n)
   if (length(feats) == 0) return(NULL)
-  # subplot() keeps only one layout title, so each panel is labelled with a
+  # subplot() keeps only one layout title, so each panel is labeled with a
   # paper-referenced annotation, which subplot remaps into that panel's domain.
   plots <- lapply(feats, function(f) {
-    de_feature_boxplot(run, f, showlegend = FALSE, title = NULL,
-                       show_y_title = FALSE) %>%
-      add_annotations(text = de_trunc(f), x = 0.5, y = 1.04,
-                      xref = "paper", yref = "paper",
-                      xanchor = "center", yanchor = "bottom",
-                      showarrow = FALSE, font = list(size = 12))
+    p <- de_feature_boxplot(run, f, showlegend = FALSE, title = NULL, show_y_title = FALSE)
+    if (is.null(p)) return(NULL)
+    add_annotations(p, text = de_trunc(f), x = 0.5, y = 1.04,
+                    xref = "paper", yref = "paper",
+                    xanchor = "center", yanchor = "bottom",
+                    showarrow = FALSE, font = list(size = 12))
   })
+  plots <- Filter(Negate(is.null), plots)
+  if (length(plots) == 0) return(NULL)
   n_rows <- ceiling(length(plots) / 3)
-  subplot(plots, nrows = n_rows, margin = c(0.03, 0.03, 0.07, 0.07),
-          titleY = FALSE) %>%
+  subplot(plots, nrows = n_rows, margin = c(0.03, 0.03, 0.07, 0.07), titleY = FALSE) %>%
     layout(showlegend = FALSE, margin = list(t = 40))
 }
 
@@ -505,44 +616,54 @@ de_top_boxplots <- function(run, n = DE_REPORT_BOXPLOT_FEATURES) {
 # ---------------------------
 
 de_methods_paragraph <- function(run) {
+  multi <- length(run$mode_labels) > 1
   test_sentence <- if (run$mode == "pairwise") {
     paste0("Differential abundance between ", html_escape(run$group_a), " and ",
            html_escape(run$group_b), " was assessed with a moderated t-test.")
   } else {
-    paste0("Features differing across any level of ", html_escape(run$group_var),
+    paste0("Features differing across ",
+           html_escape(paste(run$groups_included, collapse = ", ")),
            " were identified with a moderated F-test.")
   }
-  data_sentence <- if (identical(run$matrix_source, "batch_corrected")) {
-    paste0("Models were fitted to ComBat batch-corrected log2 intensities; ",
-           "batch was therefore not included as a covariate.")
-  } else if (isTRUE(run$use_batch)) {
-    paste0("Models were fitted to log2-normalized intensities with batch included ",
-           "as a covariate, so batch effects were controlled for in the model ",
-           "rather than removed from the matrix.")
+  data_sentence <- switch(run$matrix_source,
+    "batch_corrected" = paste0(
+      "Models were fitted to ComBat batch-corrected log2 intensities; ",
+      "batch was therefore not included as a covariate."),
+    "none" = paste0(
+      "Models were fitted to log2-normalized intensities with no batch term, ",
+      "as principal component analysis showed no batch structure requiring adjustment."),
+    paste0(
+      "Models were fitted to log2-normalized intensities with batch included as a covariate, ",
+      "so batch effects were controlled for in the model rather than removed from the matrix."))
+  mode_sentence <- if (multi) {
+    paste0(
+      "Positive and negative mode acquisitions were modeled separately, since intensities are ",
+      "not comparable between ionization modes and variance was moderated within each mode, ",
+      "and p-values from both modes were then adjusted together so that the false discovery rate ",
+      "applies to the experiment as a whole (",
+      paste(vapply(run$mode_fits, function(f) paste0(html_escape(f$label), ": ", f$n_features, " features"),
+                   character(1)), collapse = "; "), ").")
   } else {
-    "Models were fitted to log2-normalized intensities with no batch adjustment."
+    ""
   }
   sig_sentence <- if (run$mode == "pairwise") {
     paste0("Features were called differentially abundant at a Benjamini-Hochberg FDR of ",
            run$fdr_cutoff, " and an absolute log2 fold change of at least ", run$lfc_cutoff,
            ", giving ", run$n_sig, " features (", run$n_up, " higher in ",
-           html_escape(run$group_a), ", ", run$n_down, " higher in ",
-           html_escape(run$group_b), ").")
+           html_escape(run$group_a), ", ", run$n_down, " higher in ", html_escape(run$group_b), ").")
   } else {
     paste0("Features were called significant at a Benjamini-Hochberg FDR of ",
            run$fdr_cutoff, ", giving ", run$n_sig, " features.")
   }
 
   paste0(
-    "Differential analysis was performed in R using the limma package (v",
-    run$limma_version, "; Ritchie et al., 2015). ", test_sentence, " ",
-    "A linear model was fitted per feature across all ", run$n_samples,
-    " samples with one coefficient per level of ", html_escape(run$group_var), ". ",
-    data_sentence, " ",
-    "Feature-level variances were moderated towards an intensity-dependent trend by ",
-    "empirical Bayes shrinkage, and p-values were adjusted for multiple testing across ",
-    run$n_features, " features using the Benjamini-Hochberg procedure. ",
-    sig_sentence,
+    "Differential analysis was performed in R using the limma package (v", run$limma_version,
+    "; Ritchie et al., 2015). ", test_sentence, " ",
+    "A linear model was fitted per feature with one coefficient per level of ",
+    html_escape(run$group_var), ". ", data_sentence, " ", mode_sentence, " ",
+    "Feature-level variances were moderated toward an intensity-dependent trend by empirical Bayes ",
+    "shrinkage, and p-values were adjusted for multiple testing across ", run$n_features,
+    " features using the Benjamini-Hochberg procedure. ", sig_sentence,
     "<br><br>",
     "<strong>Reference:</strong> Ritchie ME, Phipson B, Wu D, et al. ",
     "limma powers differential expression analyses for RNA-sequencing and microarray studies. ",
@@ -553,6 +674,7 @@ de_methods_paragraph <- function(run) {
 # Top rows of a results table, formatted for HTML display.
 de_report_table <- function(run, n = DE_REPORT_TABLE_ROWS) {
   res <- head(run$results, n)
+  multi <- length(run$mode_labels) > 1
   if (run$mode == "pairwise") {
     df <- data.frame(
       Feature = res$feature,
@@ -575,14 +697,15 @@ de_report_table <- function(run, n = DE_REPORT_TABLE_ROWS) {
       check.names = FALSE, stringsAsFactors = FALSE
     )
   }
+  if (multi) df <- cbind(df[1], Mode = res$mode, df[-1])
   df
 }
 
 de_report_section <- function(run, index = 1) {
   main_plot <- if (run$mode == "pairwise") de_volcano_plot(run) else de_significance_plot(run)
-  heatmap <- de_heatmap_plot(run)
   boxplots <- de_top_boxplots(run)
   sel <- de_display_features(run)
+  multi <- length(run$mode_labels) > 1
 
   summary_row <- if (run$mode == "pairwise") {
     paste0("<strong>Significant:</strong> ", run$n_sig, " of ", run$n_features,
@@ -592,16 +715,44 @@ de_report_section <- function(run, index = 1) {
     paste0("<strong>Significant:</strong> ", run$n_sig, " of ", run$n_features, " features")
   }
 
+  per_mode_counts <- paste(vapply(run$mode_fits, function(f) {
+    n_sig <- sum(run$results$significant[run$results$mode == f$label])
+    paste0(html_escape(f$label), ": ", n_sig, " of ", f$n_features)
+  }, character(1)), collapse = " &middot; ")
+
+  heatmaps <- paste0(vapply(run$mode_labels, function(ml) {
+    hm <- de_heatmap_plot(run, mode_label = ml)
+    if (is.null(hm)) {
+      return(paste0("<p><em>Not enough features to draw a heatmap for ", html_escape(ml), " mode.</em></p>"))
+    }
+    msel <- de_display_features(run, mode_label = ml)
+    paste0(
+      if (multi) paste0("<h4>", html_escape(ml), " mode</h4>") else "",
+      "<p>",
+      if (msel$used_fallback) {
+        "No feature cleared the thresholds in this mode, so the strongest features by p-value are shown. "
+      } else {
+        paste0("Showing ", min(length(msel$features), DE_MAX_HEATMAP_FEATURES), " of ",
+               msel$n_available, " significant features. ")
+      },
+      "Values are per-feature z-scores; samples are grouped by ", html_escape(run$group_var), ".</p>",
+      embed_plotly(hm, height = "600px"))
+  }, character(1)), collapse = "")
+
   paste0(
     '<h2>Differential Analysis ', index, ': ', html_escape(run$label), '</h2>',
     '<div class="meta">',
     '<strong>Test:</strong> ',
     if (run$mode == "pairwise") "moderated t-test (limma)" else "moderated F-test (limma)", '<br>',
     '<strong>Grouping variable:</strong> ', html_escape(run$group_var), '<br>',
-    '<strong>Data modelled:</strong> ', de_matrix_label(run), '<br>',
+    '<strong>Groups included:</strong> ', html_escape(paste(run$groups_included, collapse = ", ")), '<br>',
+    '<strong>Ionization modes:</strong> ', html_escape(paste(run$mode_labels, collapse = ", ")),
+    if (multi) ' (fitted separately, one FDR correction across both)' else '', '<br>',
+    '<strong>Data modeled:</strong> ', de_matrix_label(run), '<br>',
     '<strong>Thresholds:</strong> FDR &le; ', run$fdr_cutoff,
     if (run$mode == "pairwise") paste0(", |log2FC| &ge; ", run$lfc_cutoff) else "", '<br>',
     summary_row,
+    if (multi) paste0('<br><strong>By mode:</strong> ', per_mode_counts) else '',
     '</div>',
 
     '<h3>Methods</h3>',
@@ -614,40 +765,33 @@ de_report_section <- function(run, index = 1) {
     html_table(de_report_table(run)),
 
     '<h3>', if (run$mode == "pairwise") "Volcano plot" else "Significance plot", '</h3>',
-    '<p>',
     if (run$mode == "pairwise") {
-      paste0("Each point is a feature. Coloured points clear both thresholds. ",
-             "Positive log2 fold changes are higher in ", html_escape(run$group_a), ".")
+      paste0('<p>Each point is a feature. Colored points clear both thresholds. ',
+             "Positive log2 fold changes are higher in ", html_escape(run$group_a), ".",
+             if (multi) " Marker shape distinguishes the two ionization modes." else "",
+             '</p>')
     } else {
-      "Each point is a feature, plotted against its mean intensity. Coloured points clear the FDR threshold."
+      paste0(
+        paste0(vapply(de_significance_help(run), function(x) paste0("<p>", x, "</p>"), character(1)),
+               collapse = ""),
+        if (multi) "<p>Marker shape distinguishes the two ionization modes.</p>" else "")
     },
-    '</p>',
     embed_plotly(main_plot, height = "450px"),
 
-    if (!is.null(heatmap)) paste0(
-      '<h3>Heatmap</h3>',
-      '<p>',
-      if (sel$used_fallback) {
-        "No feature cleared the thresholds, so the strongest features by p-value are shown. "
-      } else {
-        paste0("Showing ", min(length(sel$features), DE_MAX_HEATMAP_FEATURES), " of ",
-               sel$n_available, " significant features. ")
-      },
-      'Values are per-feature z-scores; samples are grouped by ', html_escape(run$group_var), '.</p>',
-      embed_plotly(heatmap, height = "600px")
-    ) else "",
+    '<h3>Heatmap</h3>',
+    if (multi) '<p>Each mode gets its own heatmap. Positive and negative mode were run as two separate experiments on different sample injections, so there is no single set of samples that both could be drawn against.</p>' else '',
+    heatmaps,
 
     if (!is.null(boxplots)) paste0(
       '<h3>Top feature abundances</h3>',
       '<p>Individual sample values for the ',
       min(DE_REPORT_BOXPLOT_FEATURES, length(sel$features)),
-      ' strongest features.</p>',
+      ' strongest features overall.</p>',
       embed_plotly(boxplots, height = "500px")
     ) else ""
   )
 }
 
-# Excel sheet names are capped at 31 characters by the format itself.
 de_sheet_name <- function(run, index) {
   safe <- gsub("[^A-Za-z0-9]+", "_", run$label)
   safe <- gsub("^_|_$", "", safe)
@@ -664,10 +808,15 @@ de_readme_rows <- function(runs) {
       Detail = paste0(
         "Differential analysis results for ", run$label, ". ",
         "limma ", test, " on ", de_matrix_label(run), ". ",
+        "Modes: ", paste(run$mode_labels, collapse = ", "),
+        if (length(run$mode_labels) > 1) {
+          " (fitted separately, with one Benjamini-Hochberg correction across both). "
+        } else ". ",
+        "Groups included: ", paste(run$groups_included, collapse = ", "), ". ",
         "Thresholds: FDR <= ", run$fdr_cutoff,
         if (run$mode == "pairwise") paste0(", |log2FC| >= ", run$lfc_cutoff) else "",
         ". Significant features: ", run$n_sig, " of ", run$n_features, ". ",
-        "Columns: feature, ",
+        "Columns: feature, mode, ",
         if (run$mode == "pairwise") {
           "log2FC (log2 fold change, positive = higher in the first group), fold_change, mean_intensity, t, p_value, fdr, significant."
         } else {
