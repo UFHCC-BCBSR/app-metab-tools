@@ -481,6 +481,73 @@ de_display_features <- function(run, top_n = DE_MAX_HEATMAP_FEATURES, mode_label
        n_available = if (used_fallback) nrow(res) else length(sig))
 }
 
+# PCA of just the samples in this comparison, per mode.
+#
+# The QC PCA on the Preprocess tab covers every sample, which is what you want
+# for spotting batch structure but not for seeing whether two groups separate:
+# blanks and untested groups dominate it. This one is restricted to the samples
+# the model actually used.
+#
+# Computed on ALL features, deliberately. Running it on the significant features
+# would force the groups apart no matter what the data said — the features were
+# picked for differing between exactly these groups — so the plot would be
+# guaranteed to look good and would mean nothing.
+de_comparison_pca <- function(run, mode_label = NULL, max_features = 1000) {
+  if (is.null(mode_label)) mode_label <- run$mode_labels[1]
+  fit <- de_fit_for_mode(run, mode_label)
+  if (is.null(fit)) return(NULL)
+  mat <- fit$matrix
+  if (ncol(mat) < 3) return(NULL)
+
+  vars <- apply(mat, 1, var, na.rm = TRUE)
+  keep <- is.finite(vars) & vars > 0
+  mat <- mat[keep, , drop = FALSE]
+  vars <- vars[keep]
+  if (nrow(mat) < 2) return(NULL)
+  if (nrow(mat) > max_features) {
+    mat <- mat[order(vars, decreasing = TRUE)[seq_len(max_features)], , drop = FALSE]
+  }
+
+  # No extra log here: the matrix is already log2 intensities. prcomp centers
+  # and scales each feature, which is the usual auto-scaling for PCA.
+  pca <- prcomp(t(mat), center = TRUE, scale. = TRUE)
+  var_exp <- summary(pca)$importance[2, 1:2] * 100
+  groups <- droplevels(fit$groups)
+  df <- data.frame(
+    PC1 = pca$x[, 1], PC2 = pca$x[, 2],
+    group = groups,
+    sample = fit$sample_names,
+    batch = if (!is.null(fit$batch)) as.character(fit$batch) else "",
+    stringsAsFactors = FALSE
+  )
+
+  plot_ly(df, x = ~PC1, y = ~PC2, color = ~group,
+          colors = de_group_colors(levels(groups)),
+          type = "scatter", mode = "markers",
+          marker = list(size = 9, opacity = 0.8),
+          text = ~paste0("<b>", sample, "</b><br>", run$group_var, ": ", group,
+                         if (any(nzchar(df$batch))) paste0("<br>batch: ", batch) else ""),
+          hovertemplate = "%{text}<extra></extra>") %>%
+    layout(
+      title = list(text = paste0("Samples in this comparison — ", mode_label, " mode"), x = 0.5),
+      xaxis = list(title = paste0("PC1 (", round(var_exp[1], 1), "%)")),
+      yaxis = list(title = paste0("PC2 (", round(var_exp[2], 1), "%)")),
+      legend = list(orientation = "h", y = -0.18, x = 0.5, xanchor = "center"),
+      margin = list(b = 90)
+    )
+}
+
+de_pca_help <- function(run) {
+  paste0(
+    "Principal component analysis of only the samples in this comparison (",
+    paste(run$groups_included, collapse = ", "),
+    "), so the view is not dominated by blanks and untested groups the way the ",
+    "quality-control PCA is. It is computed on all features rather than the significant ",
+    "ones: restricting it to features selected for differing between these groups would ",
+    "separate them no matter what the data said."
+  )
+}
+
 # One heatmap per mode: the modes have different samples, so there is no single
 # column axis that could hold both.
 de_heatmap_plot <- function(run, mode_label = NULL, top_n = DE_MAX_HEATMAP_FEATURES) {
@@ -768,6 +835,15 @@ de_report_section <- function(run, index = 1) {
              "</p>")
     },
     embed_plotly(main_plot, height = "450px"),
+
+    '<h3>PCA</h3>',
+    '<p>', de_pca_help(run), '</p>',
+    paste0(vapply(run$mode_labels, function(ml) {
+      fig <- de_comparison_pca(run, mode_label = ml)
+      if (is.null(fig)) return("")
+      paste0(if (multi) paste0("<h4>", html_escape(ml), " mode</h4>") else "",
+             embed_plotly(fig, height = "500px"))
+    }, character(1)), collapse = ""),
 
     '<h3>Heatmap</h3>',
     if (multi) '<p>Each mode gets its own heatmap because positive and negative mode were run as two separate experiments on different sample injections.</p>' else '',
