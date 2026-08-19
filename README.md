@@ -83,7 +83,16 @@ stay in log2 intensity units. Pareto/auto scaled matrices are for PCA,
 clustering and heatmap display, not for modeling.
 
 Results are shown as a sortable table, a volcano plot (or a significance plot
-for the F-test), a heatmap of significant features, and per-feature boxplots.
+for the F-test), a PCA of the samples in the comparison, a heatmap of
+significant features, and per-feature boxplots.
+
+The comparison PCA is separate from the quality-control PCA on the Preprocess
+tab. That one covers every sample, which is what you want for spotting batch
+structure; this one is restricted to the groups being compared, so it is not
+dominated by blanks and untested groups. It is computed on all features, not
+the significant ones — selecting features for differing between these groups
+and then plotting those features would separate the groups no matter what the
+data said.
 With two modes loaded, the volcano marks each mode with its own symbol, and each
 mode gets its own heatmap because positive and negative mode were run as two
 separate experiments on different sample injections.

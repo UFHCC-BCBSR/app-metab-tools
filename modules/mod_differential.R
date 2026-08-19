@@ -98,6 +98,12 @@ differentialUI <- function(id) {
                        uiOutput(ns("main_plot_note")),
                        plotlyOutput(ns("main_plot"), height = "500px")
               ),
+              tabPanel("PCA",
+                       br(),
+                       uiOutput(ns("pca_mode_choice")),
+                       uiOutput(ns("pca_note")),
+                       plotlyOutput(ns("comparison_pca"), height = "550px")
+              ),
               tabPanel("Heatmap",
                        br(),
                        uiOutput(ns("heatmap_mode_choice")),
@@ -405,6 +411,32 @@ differentialServer <- function(id, modes) {
     output$main_plot <- renderPlotly({
       req(rv$current)
       if (rv$current$mode == "pairwise") de_volcano_plot(rv$current) else de_significance_plot(rv$current)
+    })
+
+    output$pca_mode_choice <- renderUI({
+      req(rv$current)
+      labs <- rv$current$mode_labels
+      if (length(labs) < 2) return(NULL)
+      selectInput(ns("pca_mode"), "Ionization mode:", choices = labs, selected = labs[1])
+    })
+
+    pca_mode <- reactive({
+      req(rv$current)
+      labs <- rv$current$mode_labels
+      if (length(labs) < 2) return(labs[1])
+      if (is.null(input$pca_mode) || !input$pca_mode %in% labs) labs[1] else input$pca_mode
+    })
+
+    output$pca_note <- renderUI({
+      req(rv$current)
+      p(style = "color: #666; max-width: 900px;", de_pca_help(rv$current))
+    })
+
+    output$comparison_pca <- renderPlotly({
+      req(rv$current)
+      p <- de_comparison_pca(rv$current, mode_label = pca_mode())
+      validate(need(!is.null(p), "At least three samples and two features are needed for PCA."))
+      p
     })
 
     output$heatmap_mode_choice <- renderUI({
