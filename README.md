@@ -85,9 +85,8 @@ clustering and heatmap display, not for modeling.
 Results are shown as a sortable table, a volcano plot (or a significance plot
 for the F-test), a heatmap of significant features, and per-feature boxplots.
 With two modes loaded, the volcano marks each mode with its own symbol, and each
-mode gets its own heatmap — the two modes were run as separate experiments on
-different sample injections, so there is no single set of samples both could be
-drawn against.
+mode gets its own heatmap because positive and negative mode were run as two
+separate experiments on different sample injections.
 
 For a comparison across three or more groups there is no volcano plot to draw:
 a volcano needs one fold change per feature, which only exists when two groups

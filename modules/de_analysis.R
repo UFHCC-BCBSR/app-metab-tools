@@ -459,23 +459,15 @@ de_significance_plot <- function(run, title = NULL) {
 # The significance plot is unfamiliar, so it gets a real explanation rather than
 # a caption. Written once and used by both the app and the report.
 de_significance_help <- function(run) {
-  n_groups <- length(run$groups_included)
-  c(
-    paste0("This is not a volcano plot, and it cannot be. A volcano plot puts log2 fold change on the x-axis, ",
-           "which needs one number per feature saying how much it changed and in which direction. ",
-           "That number only exists when you compare two groups. Here ", n_groups,
-           " groups are compared at once, so a feature can be high in one group, low in another and ",
-           "middling in a third — there is no single fold change to plot."),
-    paste0("Instead each point is a feature, positioned by its average abundance across all samples ",
-           "(left to right) and by the strength of the evidence that it differs somewhere among the ",
-           "groups (bottom to top, as -log10 of the p-value). Higher means stronger evidence. ",
-           "Points above the dashed line pass the FDR cutoff of ", run$fdr_cutoff, "."),
-    paste0("Reading left to right is a sanity check: if the significant features sat only at the ",
-           "low-abundance end, the result would more likely be noise than biology. Spread across the ",
-           "abundance range is what you want to see."),
-    paste0("What this plot cannot tell you is which groups differ, or in which direction. ",
-           "For that, use the heatmap and the per-feature abundance plots below, or run a two-group ",
-           "comparison, which does give you a volcano plot.")
+  paste0(
+    "This plot is provided as an alternative to a volcano plot to view feature ",
+    "characteristics across more than 2 groups. Each point is a feature, positioned by its ",
+    "average abundance across all samples (left to right) and by the strength of the evidence ",
+    "that it differs somewhere among the groups (bottom to top, as -log10 of the p-value). ",
+    "Higher means stronger evidence. Points above the dashed line pass the FDR cutoff of ",
+    run$fdr_cutoff, ". This plot cannot tell you which groups differ, or in which direction. ",
+    "For that, use the heatmap and the per-feature abundance plots, or review the volcano plot ",
+    "from a two-group comparison."
   )
 }
 
@@ -771,15 +763,14 @@ de_report_section <- function(run, index = 1) {
              if (multi) " Marker shape distinguishes the two ionization modes." else "",
              '</p>')
     } else {
-      paste0(
-        paste0(vapply(de_significance_help(run), function(x) paste0("<p>", x, "</p>"), character(1)),
-               collapse = ""),
-        if (multi) "<p>Marker shape distinguishes the two ionization modes.</p>" else "")
+      paste0("<p>", de_significance_help(run),
+             if (multi) " Marker shape distinguishes the two ionization modes." else "",
+             "</p>")
     },
     embed_plotly(main_plot, height = "450px"),
 
     '<h3>Heatmap</h3>',
-    if (multi) '<p>Each mode gets its own heatmap. Positive and negative mode were run as two separate experiments on different sample injections, so there is no single set of samples that both could be drawn against.</p>' else '',
+    if (multi) '<p>Each mode gets its own heatmap because positive and negative mode were run as two separate experiments on different sample injections.</p>' else '',
     heatmaps,
 
     if (!is.null(boxplots)) paste0(
