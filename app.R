@@ -315,8 +315,14 @@ server <- function(input, output, session) {
   output$downloads_ready <- reactive({ length(ready_modes()) > 0 })
   outputOptions(output, "downloads_ready", suspendWhenHidden = FALSE)
 
+  # Name downloads after the data that went into them, as the single-mode app
+  # did. The first loaded mode supplies the name; without one, fall back.
   download_basename <- reactive({
-    "metabo_tools"
+    ms <- ready_modes()
+    names <- Filter(nzchar, vapply(ms, function(m) {
+      if (is.null(m$source_name)) "" else as.character(m$source_name)
+    }, character(1)))
+    if (length(names) == 0) "metabo_tools" else names[1]
   })
 
   output$download_excel <- downloadHandler(
