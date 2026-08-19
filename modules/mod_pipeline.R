@@ -205,7 +205,7 @@ pipelineServer <- function(id, mode_label, preset = reactive(NULL)) {
       count_data = NULL, sample_data = NULL, matched_data = NULL,
       preprocessed_data = NULL, normalized_data = NULL, normalized_scaled_data = NULL,
       batch_corrected_data = NULL, batch_corrected_scaled_data = NULL,
-      pca_before = NULL, pca_after = NULL,
+      pca_before = NULL, pca_after = NULL, source_name = NULL,
       matching_previewed = FALSE, preprocessing_complete = FALSE,
       pca_before_complete = FALSE, correction_complete = FALSE, combat_ran = FALSE,
       preprocessing_log = NULL, correction_log = NULL, processing_params = NULL
@@ -242,6 +242,7 @@ pipelineServer <- function(id, mode_label, preset = reactive(NULL)) {
     observeEvent(input$count_file, {
       req(input$count_file)
       values$count_data <- load_file(input$count_file$datapath)
+      values$source_name <- tools::file_path_sans_ext(basename(input$count_file$name))
       updateSelectInput(session, "feature_col", choices = colnames(values$count_data))
       updateSelectInput(session, "drop_cols", choices = colnames(values$count_data))
       reset_downstream("match")
@@ -265,6 +266,7 @@ pipelineServer <- function(id, mode_label, preset = reactive(NULL)) {
       }
       values$count_data  <- read.csv(p$feature_file, stringsAsFactors = FALSE)
       values$sample_data <- read.csv(p$sample_file, stringsAsFactors = FALSE)
+      values$source_name <- tools::file_path_sans_ext(basename(p$feature_file))
       feature_col <- if (is.null(p$feature_col)) colnames(values$count_data)[1] else p$feature_col
       updateSelectInput(session, "feature_col", choices = colnames(values$count_data), selected = feature_col)
       updateSelectInput(session, "drop_cols", choices = colnames(values$count_data), selected = p$drop_cols)
@@ -599,6 +601,7 @@ pipelineServer <- function(id, mode_label, preset = reactive(NULL)) {
       if (is.null(values$normalized_data) || is.null(values$matched_data)) return(NULL)
       list(
         label = mode_label(),
+        source_name = values$source_name,
         matched_data = values$matched_data,
         preprocessed = values$preprocessed_data,
         normalized = values$normalized_data,
