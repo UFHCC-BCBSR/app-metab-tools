@@ -14,6 +14,7 @@ library(rmarkdown)
 library(ggplot2)
 library(RColorBrewer)
 library(limma)
+library(ropls)
 
 options(shiny.maxRequestSize = 30*1024^3)
 
@@ -23,6 +24,7 @@ source("modules/report_utils.R")
 source("modules/preprocessing.R")
 source("modules/report.R")
 source("modules/de_analysis.R")
+source("modules/plsda.R")
 source("modules/mod_pipeline.R")
 source("modules/mod_differential.R")
 

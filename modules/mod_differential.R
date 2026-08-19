@@ -104,6 +104,28 @@ differentialUI <- function(id) {
                        uiOutput(ns("pca_note")),
                        plotlyOutput(ns("comparison_pca"), height = "550px")
               ),
+              tabPanel("PLS-DA",
+                       br(),
+                       uiOutput(ns("plsda_mode_choice")),
+                       fluidRow(
+                         column(3, numericInput(ns("plsda_perm"), "Permutations:",
+                                                value = PLSDA_DEFAULT_PERMUTATIONS,
+                                                min = 20, max = 2000, step = 50)),
+                         column(4, br(),
+                                actionButton(ns("run_plsda"), "Fit PLS-DA",
+                                             class = "btn-warning", icon = icon("project-diagram")))
+                       ),
+                       p(style = "color: #666; font-size: 12px;",
+                         "Fitting includes cross-validation and a permutation test, so it takes a few seconds."),
+                       uiOutput(ns("plsda_verdict")),
+                       plotlyOutput(ns("plsda_scores"), height = "480px"),
+                       br(),
+                       plotlyOutput(ns("plsda_vip"), height = "520px"),
+                       br(),
+                       DT::dataTableOutput(ns("plsda_vip_table")),
+                       br(),
+                       uiOutput(ns("plsda_help"))
+              ),
               tabPanel("Heatmap",
                        br(),
                        uiOutput(ns("heatmap_mode_choice")),
@@ -344,8 +366,9 @@ differentialServer <- function(id, modes) {
         )
         run$source_fingerprint <- run_fingerprint(run, current_fingerprints())
 
-        rv$current <- run
         key <- paste0(run$label, " [", run$matrix_source, "]")
+        run$key <- key
+        rv$current <- run
         rv$runs[[key]] <- run
 
         updateSelectizeInput(session, "feature", choices = run$results$feature,
@@ -437,6 +460,95 @@ differentialServer <- function(id, modes) {
       p <- de_comparison_pca(rv$current, mode_label = pca_mode())
       validate(need(!is.null(p), "At least three samples and two features are needed for PCA."))
       p
+    })
+
+    # ---- PLS-DA ---------------------------------------------------------
+    output$plsda_mode_choice <- renderUI({
+      req(rv$current)
+      labs <- rv$current$mode_labels
+      if (length(labs) < 2) return(NULL)
+      selectInput(ns("plsda_mode"), "Ionization mode:", choices = labs, selected = labs[1])
+    })
+
+    plsda_mode <- reactive({
+      req(rv$current)
+      labs <- rv$current$mode_labels
+      if (length(labs) < 2) return(labs[1])
+      if (is.null(input$plsda_mode) || !input$plsda_mode %in% labs) labs[1] else input$plsda_mode
+    })
+
+    current_plsda <- reactive({
+      req(rv$current)
+      fits <- rv$current$plsda
+      if (is.null(fits)) return(NULL)
+      fits[[plsda_mode()]]
+    })
+
+    observeEvent(input$run_plsda, {
+      req(rv$current)
+      ml <- plsda_mode()
+      shinyjs::disable("run_plsda")
+      showModal(modalDialog(
+        paste0("Fitting PLS-DA for ", ml, " mode, with cross-validation and ",
+               input$plsda_perm, " permutations..."), footer = NULL))
+      tryCatch({
+        fit <- plsda_fit(rv$current, mode_label = ml, n_perm = input$plsda_perm)
+        fits <- rv$current$plsda
+        if (is.null(fits)) fits <- list()
+        fits[[ml]] <- fit
+        rv$current$plsda <- fits
+        # keep the saved copy in step, so the report includes this fit
+        if (!is.null(rv$current$key) && !is.null(rv$runs[[rv$current$key]])) {
+          rv$runs[[rv$current$key]]$plsda <- fits
+        }
+        removeModal(); shinyjs::enable("run_plsda")
+        v <- plsda_verdict(fit)
+        showNotification(v$headline,
+                         type = if (v$level == "good") "message" else "warning",
+                         duration = 10)
+      }, error = function(e) {
+        removeModal(); shinyjs::enable("run_plsda")
+        showNotification(paste("PLS-DA failed:", e$message), type = "error", duration = 12)
+      })
+    })
+
+    output$plsda_verdict <- renderUI({
+      fit <- current_plsda()
+      if (is.null(fit)) {
+        return(p(style = "color: #666;",
+                 "Not fitted yet for this mode. PLS-DA is supervised and can separate groups that do not differ, so it is fitted on request and always reported with its cross-validation and permutation test."))
+      }
+      HTML(plsda_verdict_html(fit))
+    })
+
+    output$plsda_scores <- renderPlotly({
+      fit <- current_plsda()
+      validate(need(!is.null(fit), "Fit PLS-DA to see the scores plot."))
+      p <- plsda_scores_plot(fit)
+      validate(need(!is.null(p), "No scores plot: cross-validation kept no component, so there is nothing to plot but noise."))
+      p
+    })
+
+    output$plsda_vip <- renderPlotly({
+      fit <- current_plsda()
+      validate(need(!is.null(fit), ""))
+      p <- plsda_vip_plot(fit)
+      validate(need(!is.null(p), "No VIP scores: no model was built."))
+      p
+    })
+
+    output$plsda_vip_table <- DT::renderDataTable({
+      fit <- current_plsda()
+      req(!is.null(fit))
+      df <- plsda_vip_table(fit)
+      req(!is.null(df))
+      DT::datatable(df, rownames = FALSE, selection = "none",
+                    options = list(scrollX = TRUE, pageLength = 10)) %>%
+        DT::formatSignif(columns = "VIP", digits = 3)
+    })
+
+    output$plsda_help <- renderUI({
+      p(style = "color: #666; max-width: 900px;", plsda_help_text())
     })
 
     output$heatmap_mode_choice <- renderUI({

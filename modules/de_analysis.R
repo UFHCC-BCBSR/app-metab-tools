@@ -849,6 +849,8 @@ de_report_section <- function(run, index = 1) {
     if (multi) '<p>Each mode gets its own heatmap because positive and negative mode were run as two separate experiments on different sample injections.</p>' else '',
     heatmaps,
 
+    plsda_report_section(run),
+
     if (!is.null(boxplots)) paste0(
       '<h3>Top feature abundances</h3>',
       '<p>Individual sample values for the ',

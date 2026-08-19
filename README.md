@@ -108,6 +108,33 @@ in the HTML report. Comparisons are dropped automatically if you re-run
 preprocessing or batch correction, so results never outlive the data they were
 fitted on.
 
+## PLS-DA
+
+PLS-DA is available per comparison, alongside the volcano plot, PCA and heatmap.
+Unlike PCA it is **supervised** — it is told which group each sample belongs to
+and finds the projection that best separates them. That makes it good at showing
+class structure and prone to inventing it: with thousands of features and tens of
+samples, PLS-DA will separate randomly assigned labels.
+
+So it is never shown on its own. Every fit is cross-validated (seven-fold) and
+permutation tested, and the result is reported in plain language above the plot:
+
+| Reported | Means |
+|---|---|
+| `R2Y` | How much of the class information the model captures — fit, not evidence |
+| `Q2` | How well it predicts samples held out of fitting. Below 0 is worse than chance; above 0.4 is conventionally "predictive" |
+| permutation p | How often models trained on shuffled labels reach that `Q2` |
+
+If cross-validation keeps no component, **no scores plot is drawn at all** — there
+would be nothing in it but noise, and the app says so rather than showing a
+picture that invites the wrong conclusion.
+
+VIP scores rank features by contribution to the separation, shown as a plot and a
+table, with the conventional threshold of 1 marked.
+
+Fitting is on demand rather than automatic, since cross-validation and
+permutation take a few seconds. Fitted models are included in the HTML report.
+
 ## Output
 
 The Excel download contains the following data snapshots:
