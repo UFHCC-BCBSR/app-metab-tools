@@ -117,6 +117,26 @@ With two modes loaded, each mode's sheets carry a prefix taken from its name
 (`POS_data_normalized`, `NEG_metadata`, and so on). With a single mode the names
 are unprefixed, as above.
 
+## Slides
+
+`scripts/make_slides.R` builds a self-contained reveal.js deck from the same
+modules the app uses, so the numbers on the slides are the numbers the app
+produces:
+
+```bash
+Rscript scripts/make_slides.R my_slides.html
+```
+
+Edit the `CONFIG` block at the top to point at your data and choose which
+comparisons become slides. The output is a single HTML file — reveal.js,
+plotly and every figure are inlined — so it needs no internet when presented
+and nothing but a static file server to host. Plots stay interactive: hover,
+zoom, and legend toggling all work in the deck. Expect roughly 6 MB.
+
+Arrow keys navigate, `f` goes full screen, `s` opens speaker notes, and
+`?print-pdf` in the URL gives a printable version. Building the deck needs the
+`revealjs` package for its bundled assets; viewers need only a browser.
+
 ## Contact
 
 Hannah Kates — [hkates@ufl.edu](mailto:hkates@ufl.edu)
