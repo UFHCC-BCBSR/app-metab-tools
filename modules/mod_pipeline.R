@@ -175,7 +175,7 @@ pipelineCorrectionUI <- function(id, label) {
                             "None" = "None"
                           ), selected = "ParetoNorm"),
               p(style = "color: #666; font-size: 12px;",
-                "Scaling is applied to the normalized data, and to the batch-corrected data as well when ComBat is run. Scaling affects PCA, clustering and heatmaps; differential analysis is always modelled on the unscaled log2 data.")
+                "Scaling is applied to the normalized data, and to the batch-corrected data as well when ComBat is run. Scaling affects PCA, clustering and heatmaps; differential analysis is always modeled on the unscaled log2 data.")
           ),
           actionButton(ns("run_correction"), "Apply", class = "btn-success btn-lg"),
           br(), br(),
@@ -580,7 +580,7 @@ pipelineServer <- function(id, mode_label, preset = reactive(NULL)) {
         p(style = "color: #666;",
           "If the batch panel shows no separation, there is no batch effect to remove and ComBat can be skipped on the next tab.")
       } else {
-        p(style = "color: #666;", "No batch variable for this mode, so samples are coloured by biological group only.")
+        p(style = "color: #666;", "No batch variable for this mode, so samples are colored by biological group only.")
       }
     })
 

@@ -5,13 +5,13 @@
 # differential analysis module. Nothing here touches Shiny reactivity, so every
 # piece can be run and checked from a plain R session.
 #
-# Modelling follows limma: one linear model per feature on log2 intensities,
+# Modeling follows limma: one linear model per feature on log2 intensities,
 # with variance moderated across features by empirical Bayes. Two matrices can
-# be modelled and the two are mutually exclusive, exactly as the processing
+# be modeled and the two are mutually exclusive, exactly as the processing
 # report warns:
 #   "normalized"      log2-normalized data, batch included as a model covariate
 #   "batch_corrected" ComBat-corrected data, no batch term in the design
-# Scaled matrices are never modelled — Pareto/auto scaling would leave the
+# Scaled matrices are never modeled — Pareto/auto scaling would leave the
 # coefficients in scaled units and destroy the fold change interpretation.
 
 DE_MAX_HEATMAP_FEATURES <- 50
@@ -456,6 +456,29 @@ de_significance_plot <- function(run, title = NULL) {
 
 # Features worth showing, optionally restricted to one mode: significant ones,
 # or the top of the table when nothing clears the threshold.
+# The significance plot is unfamiliar, so it gets a real explanation rather than
+# a caption. Written once and used by both the app and the report.
+de_significance_help <- function(run) {
+  n_groups <- length(run$groups_included)
+  c(
+    paste0("This is not a volcano plot, and it cannot be. A volcano plot puts log2 fold change on the x-axis, ",
+           "which needs one number per feature saying how much it changed and in which direction. ",
+           "That number only exists when you compare two groups. Here ", n_groups,
+           " groups are compared at once, so a feature can be high in one group, low in another and ",
+           "middling in a third — there is no single fold change to plot."),
+    paste0("Instead each point is a feature, positioned by its average abundance across all samples ",
+           "(left to right) and by the strength of the evidence that it differs somewhere among the ",
+           "groups (bottom to top, as -log10 of the p-value). Higher means stronger evidence. ",
+           "Points above the dashed line pass the FDR cutoff of ", run$fdr_cutoff, "."),
+    paste0("Reading left to right is a sanity check: if the significant features sat only at the ",
+           "low-abundance end, the result would more likely be noise than biology. Spread across the ",
+           "abundance range is what you want to see."),
+    paste0("What this plot cannot tell you is which groups differ, or in which direction. ",
+           "For that, use the heatmap and the per-feature abundance plots below, or run a two-group ",
+           "comparison, which does give you a volcano plot.")
+  )
+}
+
 de_display_features <- function(run, top_n = DE_MAX_HEATMAP_FEATURES, mode_label = NULL) {
   res <- run$results
   if (!is.null(mode_label)) res <- res[res$mode == mode_label, , drop = FALSE]
@@ -571,7 +594,7 @@ de_top_boxplots <- function(run, n = DE_REPORT_BOXPLOT_FEATURES) {
   sel <- de_display_features(run, n)
   feats <- head(sel$features, n)
   if (length(feats) == 0) return(NULL)
-  # subplot() keeps only one layout title, so each panel is labelled with a
+  # subplot() keeps only one layout title, so each panel is labeled with a
   # paper-referenced annotation, which subplot remaps into that panel's domain.
   plots <- lapply(feats, function(f) {
     p <- de_feature_boxplot(run, f, showlegend = FALSE, title = NULL, show_y_title = FALSE)
@@ -614,7 +637,7 @@ de_methods_paragraph <- function(run) {
       "so batch effects were controlled for in the model rather than removed from the matrix."))
   mode_sentence <- if (multi) {
     paste0(
-      "Positive and negative mode acquisitions were modelled separately, since intensities are ",
+      "Positive and negative mode acquisitions were modeled separately, since intensities are ",
       "not comparable between ionization modes and variance was moderated within each mode, ",
       "and p-values from both modes were then adjusted together so that the false discovery rate ",
       "applies to the experiment as a whole (",
@@ -638,7 +661,7 @@ de_methods_paragraph <- function(run) {
     "; Ritchie et al., 2015). ", test_sentence, " ",
     "A linear model was fitted per feature with one coefficient per level of ",
     html_escape(run$group_var), ". ", data_sentence, " ", mode_sentence, " ",
-    "Feature-level variances were moderated towards an intensity-dependent trend by empirical Bayes ",
+    "Feature-level variances were moderated toward an intensity-dependent trend by empirical Bayes ",
     "shrinkage, and p-values were adjusted for multiple testing across ", run$n_features,
     " features using the Benjamini-Hochberg procedure. ", sig_sentence,
     "<br><br>",
@@ -725,7 +748,7 @@ de_report_section <- function(run, index = 1) {
     '<strong>Groups included:</strong> ', html_escape(paste(run$groups_included, collapse = ", ")), '<br>',
     '<strong>Ionization modes:</strong> ', html_escape(paste(run$mode_labels, collapse = ", ")),
     if (multi) ' (fitted separately, one FDR correction across both)' else '', '<br>',
-    '<strong>Data modelled:</strong> ', de_matrix_label(run), '<br>',
+    '<strong>Data modeled:</strong> ', de_matrix_label(run), '<br>',
     '<strong>Thresholds:</strong> FDR &le; ', run$fdr_cutoff,
     if (run$mode == "pairwise") paste0(", |log2FC| &ge; ", run$lfc_cutoff) else "", '<br>',
     summary_row,
@@ -742,19 +765,21 @@ de_report_section <- function(run, index = 1) {
     html_table(de_report_table(run)),
 
     '<h3>', if (run$mode == "pairwise") "Volcano plot" else "Significance plot", '</h3>',
-    '<p>',
     if (run$mode == "pairwise") {
-      paste0("Each point is a feature. Coloured points clear both thresholds. ",
-             "Positive log2 fold changes are higher in ", html_escape(run$group_a), ".")
+      paste0('<p>Each point is a feature. Colored points clear both thresholds. ',
+             "Positive log2 fold changes are higher in ", html_escape(run$group_a), ".",
+             if (multi) " Marker shape distinguishes the two ionization modes." else "",
+             '</p>')
     } else {
-      "Each point is a feature, plotted against its mean intensity. Coloured points clear the FDR threshold."
+      paste0(
+        paste0(vapply(de_significance_help(run), function(x) paste0("<p>", x, "</p>"), character(1)),
+               collapse = ""),
+        if (multi) "<p>Marker shape distinguishes the two ionization modes.</p>" else "")
     },
-    if (multi) " Marker shape distinguishes the two ionization modes." else "",
-    '</p>',
     embed_plotly(main_plot, height = "450px"),
 
     '<h3>Heatmap</h3>',
-    if (multi) '<p>One heatmap per mode: the modes are separate acquisitions with different samples, so they cannot share a column axis.</p>' else '',
+    if (multi) '<p>Each mode gets its own heatmap. Positive and negative mode were run as two separate experiments on different sample injections, so there is no single set of samples that both could be drawn against.</p>' else '',
     heatmaps,
 
     if (!is.null(boxplots)) paste0(

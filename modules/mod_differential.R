@@ -155,7 +155,7 @@ differentialServer <- function(id, modes) {
         p(style = "color: #666;",
           paste0(length(ms), " ionization modes loaded (",
                  paste(vapply(ms, function(m) m$label, character(1)), collapse = ", "),
-                 "). Each is modelled separately and the false discovery rate is corrected once across both, so the FDR applies to the experiment rather than to one acquisition."))
+                 "). Each is modeled separately and the false discovery rate is corrected once across both, so the FDR applies to the experiment rather than to one acquisition."))
       }
     })
 
@@ -242,7 +242,7 @@ differentialServer <- function(id, modes) {
       updateSelectInput(session, "groups_included", choices = lv, selected = sel_multi)
     })
 
-    # Which matrices can be modelled depends on what each mode actually has.
+    # Which matrices can be modeled depends on what each mode actually has.
     output$matrix_choice <- renderUI({
       ms <- active_modes()
       req(length(ms) > 0)
@@ -391,14 +391,17 @@ differentialServer <- function(id, modes) {
     output$main_plot_note <- renderUI({
       req(rv$current)
       multi <- length(rv$current$mode_labels) > 1
-      base <- if (rv$current$mode == "pairwise") {
-        paste0("Coloured points clear both the FDR and fold change thresholds. ",
-               "Positive log2 fold changes are higher in ", rv$current$group_a, ".")
+      mode_note <- if (multi) " Marker shape distinguishes the two ionization modes." else ""
+      if (rv$current$mode == "pairwise") {
+        p(style = "color: #666;",
+          paste0("Colored points clear both the FDR and fold change thresholds. ",
+                 "Positive log2 fold changes are higher in ", rv$current$group_a, ".", mode_note))
       } else {
-        "An F-test has no single fold change, so features are plotted against mean intensity. Coloured points clear the FDR threshold."
+        paras <- de_significance_help(rv$current)
+        paras[length(paras)] <- paste0(paras[length(paras)], mode_note)
+        div(style = "color: #666; max-width: 900px;",
+            lapply(paras, function(x) p(x)))
       }
-      p(style = "color: #666;",
-        paste0(base, if (multi) " Marker shape distinguishes the two ionization modes." else ""))
     })
 
     output$main_plot <- renderPlotly({
@@ -425,7 +428,9 @@ differentialServer <- function(id, modes) {
       ml <- heatmap_mode()
       sel <- de_display_features(rv$current, mode_label = ml)
       multi <- length(rv$current$mode_labels) > 1
-      prefix <- if (multi) "The modes have different samples, so each gets its own heatmap. " else ""
+      prefix <- if (multi) paste0("Each mode gets its own heatmap: positive and negative mode were run as ",
+                                 "two separate experiments on different sample injections, so there is no ",
+                                 "single set of samples that both could be drawn against. ") else ""
       if (sel$used_fallback) {
         p(style = "color: #666;",
           paste0(prefix, "No feature cleared the thresholds in this mode, so the strongest features by p-value are shown. Values are per-feature z-scores."))

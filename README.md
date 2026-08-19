@@ -24,7 +24,7 @@ normalized and (optionally) batch corrected entirely on its own. PCA is shown
 per mode for the same reason: a combined PCA is dominated by whichever mode
 contributes more features.
 
-The modes come together only for differential analysis, where each is modelled
+The modes come together only for differential analysis, where each is modeled
 separately and the p-values from both are then adjusted **once**, together. That
 keeps variance moderation inside a single noise regime while making the false
 discovery rate a property of the experiment rather than of one acquisition.
@@ -74,19 +74,26 @@ exclusive:
   variable exists) — batch is a term in the model, so its effect is controlled
   for rather than removed.
 - **Log2-normalized data with no batch adjustment** — for data with no batch
-  variable, or no batch effect worth modelling.
+  variable, or no batch effect worth modeling.
 - **ComBat-corrected data with no batch term** — offered once ComBat has been
   run for every loaded mode; batch has already been removed from the matrix.
 
 Either way the model is fitted to unscaled log2 intensities, so fold changes
 stay in log2 intensity units. Pareto/auto scaled matrices are for PCA,
-clustering and heatmap display, not for modelling.
+clustering and heatmap display, not for modeling.
 
 Results are shown as a sortable table, a volcano plot (or a significance plot
 for the F-test), a heatmap of significant features, and per-feature boxplots.
-With two modes loaded, the volcano marks each mode with its own symbol and the
-heatmap is drawn per mode, since the modes have different samples and cannot
-share a column axis.
+With two modes loaded, the volcano marks each mode with its own symbol, and each
+mode gets its own heatmap — the two modes were run as separate experiments on
+different sample injections, so there is no single set of samples both could be
+drawn against.
+
+For a comparison across three or more groups there is no volcano plot to draw:
+a volcano needs one fold change per feature, which only exists when two groups
+are compared. The significance plot shown instead places each feature by its
+average abundance and by the strength of the evidence that it differs somewhere
+among the groups. The app explains this in full alongside the plot.
 Every comparison you run is saved: each one becomes its own sheet in the Excel
 download and its own section — methods paragraph, top features, and all plots —
 in the HTML report. Comparisons are dropped automatically if you re-run

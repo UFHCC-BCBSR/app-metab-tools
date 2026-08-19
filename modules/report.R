@@ -99,7 +99,7 @@ generate_readme <- function(modes, de_runs = list()) {
         } else {
           "No batch variable was supplied for this mode. "
         },
-        "Use for statistical modelling."))
+        "Use for statistical modeling."))
     )
     if (isTRUE(p$combat_applied)) {
       sheet_rows[[length(sheet_rows) + 1]] <- c(sh$batch_corrected_scaled, paste0(
@@ -210,7 +210,7 @@ mode_methods_paragraph <- function(mode) {
     if (p$do_missing_filter) paste0("Features with greater than 50% missing or zero values were removed, retaining ",
                                     p$n_after_missing, " features. ") else "",
     if (p$do_imputation) paste0("Remaining missing and zero values (n = ", p$n_imputed,
-                                ") were imputed using k-nearest neighbours (KNN, k = 10) as implemented in the ",
+                                ") were imputed using k-nearest neighbors (KNN, k = 10) as implemented in the ",
                                 "Bioconductor impute package (v", impute_version, "). ") else "",
     if (p$do_iqr_filter) paste0("Low-variance features were removed by filtering the bottom ", p$iqr_threshold,
                                 "% by interquartile range, retaining ", p$n_after_iqr, " features. ") else "",
@@ -260,12 +260,12 @@ mode_file_rows <- function(modes) {
         "Apply your own normalization, transformation and scaling."),
       c(sh$normalized, "After sample normalization and log2 transformation",
         "Apply your own scaling or batch correction method."),
-      c(paste0(sh$normalized_scaled, ' <span class="tag tag-secondary">modelling</span>'),
+      c(paste0(sh$normalized_scaled, ' <span class="tag tag-secondary">modeling</span>'),
         paste0("Normalized, log2 transformed, scaled (", scale_label_for(p$scale_norm), ")"),
         if (isTRUE(p$has_batch)) {
-          "Statistical modelling with batch included as a covariate. Batch effects are present in this matrix — they are controlled for in the model, not removed."
+          "Statistical modeling with batch included as a covariate. Batch effects are present in this matrix — they are controlled for in the model, not removed."
         } else {
-          "Statistical modelling. No batch variable was supplied for this mode."
+          "Statistical modeling. No batch variable was supplied for this mode."
         })
     )
     if (isTRUE(p$combat_applied)) {
@@ -340,7 +340,7 @@ generate_html_report <- function(modes, de_runs = list(), output_path) {
 
   pca_block <- paste0(
     '<h2>PCA Plots</h2>',
-    '<p>PCA is shown per mode, since the modes are separate acquisitions on different intensity scales. Points are coloured by biological group and by batch to show whether batch structure is present and, where ComBat was applied, whether it was removed while biological signal was preserved.</p>',
+    '<p>PCA is shown per mode, since the modes are separate acquisitions on different intensity scales. Points are colored by biological group and by batch to show whether batch structure is present and, where ComBat was applied, whether it was removed while biological signal was preserved.</p>',
     paste0(vapply(modes, function(m) {
       section <- paste0('<h3>', html_escape(m$label), ' mode</h3>')
       if (!is.null(m$pca_before)) {
@@ -367,7 +367,7 @@ generate_html_report <- function(modes, de_runs = list(), output_path) {
 
   batch_warning <- if (any_batch) {
     paste0(
-      '<div class="warning"><strong>Note on batch correction and statistical modelling:</strong> ',
+      '<div class="warning"><strong>Note on batch correction and statistical modeling:</strong> ',
       'These two approaches are mutually exclusive. If you use a <code>data_batch_corrected_scaled</code> matrix, ',
       'do not include batch as a covariate in your model. If you use <code>data_normalized_scaled</code>, ',
       'include batch as a covariate. Do not do both.</div>')
